@@ -1,0 +1,20 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "Lungo",
+  "outputfilename": "Lungo",
+  "frontend:install": "npm install --no-audit --no-fund",
+  "frontend:build": "npm run build",
+  "frontend:dev:watcher": "npm run dev",
+  "frontend:dev:serverUrl": "auto",
+  "wailsjsdir": "./frontend/src",
+  "author": {
+    "name": "Lungo"
+  },
+  "info": {
+    "companyName": "Lungo",
+    "productName": "Lungo",
+    "productVersion": "0.1.0",
+    "copyright": "",
+    "comments": "Machines and Claude Code sessions"
+  }
+}

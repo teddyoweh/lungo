@@ -1,0 +1,11 @@
+# build output
+/bin/
+/dist/
+desktop/build/bin/
+desktop/frontend/node_modules/
+desktop/frontend/dist/
+desktop/frontend/wailsjs/
+*.test
+.DS_Store
+/sky
+/desktop/desktop

@@ -1,0 +1,179 @@
+#!/bin/bash
+# skybuild machine setup. Runs as root on first boot (and on every boot on GCP); safe to re-run.
+# Puts /home on the persistent data volume, creates the user, installs the toolchain.
+set -uo pipefail
+mkdir -p /var/lib/skybuild
+touch /var/log/skybuild-setup.log && chmod 644 /var/log/skybuild-setup.log
+exec > >(tee -a /var/log/skybuild-setup.log) 2>&1
+
+SKY_NAME={{q .Name}}
+SKY_USER={{q .User}}
+SKY_KEY={{q .PublicKey}}
+DATA_DEVICES={{q .DataDevices}}
+DATA_GB={{.DataGB}}
+INSTALL_DOCKER={{if .Docker}}1{{else}}0{{end}}
+INSTALL_TAILSCALE={{if .Tailscale}}1{{else}}0{{end}}
+AUTO_TMUX={{if .AutoTmux}}1{{else}}0{{end}}
+EXISTING={{if .Existing}}1{{else}}0{{end}}
+STATE=/var/lib/skybuild
+export DEBIAN_FRONTEND=noninteractive NEEDRESTART_SUSPEND=1 NEEDRESTART_MODE=a
+APT="apt-get -y -q -o DPkg::Lock::Timeout=600"
+
+step() { echo "[sky] $*"; echo "$*" > "$STATE/step"; }
+rm -f "$STATE/ready"
+step "Setup started (skybuild {{.Version}})"
+
+# ---------- data volume -> /home ----------
+find_data_disk() {
+  local d
+  for d in $DATA_DEVICES; do
+    [ "$d" = auto ] && continue
+    if [ -b "$d" ]; then readlink -f "$d"; return; fi
+  done
+  case " $DATA_DEVICES " in *" auto "*) ;; *) return ;; esac
+  local root want name size type
+  root=$(lsblk -no PKNAME "$(findmnt -no SOURCE /)" 2>/dev/null | head -1)
+  want=$((DATA_GB * 1024 * 1024 * 1024))
+  while read -r name size type; do
+    [ "$type" = disk ] && [ "$name" != "$root" ] && [ "$size" = "$want" ] || continue
+    [ "$(lsblk -no NAME "/dev/$name" | wc -l)" -eq 1 ] || continue   # has partitions
+    findmnt -rn -S "/dev/$name" >/dev/null && continue                 # already mounted
+    echo "/dev/$name"; return
+  done < <(lsblk -dbno NAME,SIZE,TYPE)
+}
+
+if [ -n "$DATA_DEVICES" ]; then
+  step "Preparing data volume"
+  DISK=""
+  for _ in $(seq 1 90); do DISK=$(find_data_disk); [ -n "$DISK" ] && break; sleep 2; done
+  if [ -z "$DISK" ]; then
+    echo "[sky] WARNING: data volume not found; /home stays on the boot disk"
+  else
+    if ! blkid "$DISK" >/dev/null 2>&1; then
+      step "Formatting new data volume $DISK"
+      mkfs.ext4 -q -L skydata -m 0 -E lazy_itable_init=1,lazy_journal_init=1 "$DISK"
+    fi
+    UUID=$(blkid -s UUID -o value "$DISK")
+    if [ "$(findmnt -no SOURCE /home 2>/dev/null)" != "$DISK" ]; then
+      mkdir -p /mnt/skydata
+      mount "$DISK" /mnt/skydata
+      if [ ! -e /mnt/skydata/.skybuild-volume ]; then
+        cp -a /home/. /mnt/skydata/ 2>/dev/null || true   # keep homes the image created
+        date -u +%FT%TZ > /mnt/skydata/.skybuild-volume
+      fi
+      umount /mnt/skydata
+      sed -i '\#[[:space:]]/home[[:space:]]#d' /etc/fstab
+      echo "UUID=$UUID /home ext4 defaults,nofail,discard 0 2" >> /etc/fstab
+      mount /home
+    fi
+    resize2fs "$DISK" >/dev/null 2>&1 || true   # picks up a grown volume
+    echo "[sky] /home is on $DISK ($(df -h /home | awk 'NR==2{print $2}'))"
+  fi
+fi
+
+# ---------- swap (node builds on small machines) ----------
+if [ -z "$(swapon --show --noheadings)" ] && [ ! -f /swapfile ]; then
+  fallocate -l 4G /swapfile && chmod 600 /swapfile && mkswap -q /swapfile && swapon /swapfile \
+    && echo "/swapfile none swap sw 0 0" >> /etc/fstab
+fi
+
+# ---------- user ----------
+step "Creating user $SKY_USER"
+[ "$EXISTING" = 1 ] || hostnamectl set-hostname "$SKY_NAME" 2>/dev/null || true
+if ! id "$SKY_USER" >/dev/null 2>&1; then
+  useradd -m -u 2000 -U -s /bin/bash "$SKY_USER" 2>/dev/null || useradd -m -U -s /bin/bash "$SKY_USER"
+fi
+[ "$EXISTING" = 1 ] || { echo "$SKY_USER ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/90-skybuild && chmod 440 /etc/sudoers.d/90-skybuild; }
+H=$(getent passwd "$SKY_USER" | cut -d: -f6)
+install -d -m 755 -o "$SKY_USER" -g "$SKY_USER" "$H"
+install -d -m 700 -o "$SKY_USER" -g "$SKY_USER" "$H/.ssh"
+touch "$H/.ssh/authorized_keys"
+grep -qxF "$SKY_KEY" "$H/.ssh/authorized_keys" || echo "$SKY_KEY" >> "$H/.ssh/authorized_keys"
+chown "$SKY_USER:$SKY_USER" "$H/.ssh/authorized_keys" && chmod 600 "$H/.ssh/authorized_keys"
+as_user() { sudo -u "$SKY_USER" -H bash -lc "$1"; }
+
+# Many terminals and sync share one SSH connection; the default of 10 sessions is too few.
+if [ "$EXISTING" != 1 ] && [ -d /etc/ssh/sshd_config.d ] && [ ! -f /etc/ssh/sshd_config.d/60-skybuild.conf ]; then
+  printf 'MaxSessions 64\nClientAliveInterval 30\n' > /etc/ssh/sshd_config.d/60-skybuild.conf
+  systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
+fi
+
+# ---------- system packages (once per boot disk) ----------
+if [ ! -f "$STATE/packages-v1" ]; then
+  step "Installing base packages"
+  # Skip the man-page index rebuild after every install; it's the slowest part of apt.
+  echo 'man-db man-db/auto-update boolean false' | debconf-set-selections
+  rm -f /var/lib/man-db/auto-update
+  $APT update
+  $APT install --no-install-recommends git tmux zsh curl wget jq rsync unzip zip build-essential ripgrep fd-find htop \
+    ca-certificates gnupg python3 python3-venv python3-pip sqlite3 lsof
+
+  step "Installing Node.js"
+  curl -fsSL https://deb.nodesource.com/setup_24.x | bash - >/dev/null && $APT install nodejs
+
+  step "Installing GitHub CLI"
+  install -d -m 755 /etc/apt/keyrings
+  curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli-archive-keyring.gpg
+  chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg
+  echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+    > /etc/apt/sources.list.d/github-cli.list
+  $APT update && $APT install gh
+
+  if [ "$INSTALL_DOCKER" = 1 ]; then
+    step "Installing Docker"
+    $APT install docker.io docker-compose-v2 docker-buildx || $APT install docker.io
+  fi
+  if [ "$INSTALL_TAILSCALE" = 1 ]; then
+    step "Installing Tailscale"
+    curl -fsSL https://tailscale.com/install.sh | sh
+  fi
+  touch "$STATE/packages-v1"
+fi
+[ "$INSTALL_DOCKER" = 1 ] && getent group docker >/dev/null && usermod -aG docker "$SKY_USER"
+[ "$EXISTING" = 1 ] || usermod -s /usr/bin/zsh "$SKY_USER"
+
+# ---------- per-user tools (live on the data volume, so only the first time) ----------
+step "Installing Claude Code"
+as_user 'command -v claude >/dev/null || [ -x ~/.local/bin/claude ] || curl -fsSL https://claude.ai/install.sh | bash'
+step "Installing Bun and uv"
+as_user '[ -x ~/.bun/bin/bun ] || curl -fsSL https://bun.sh/install | bash >/dev/null'
+as_user '[ -x ~/.local/bin/uv ] || curl -LsSf https://astral.sh/uv/install.sh | UV_NO_MODIFY_PATH=1 sh >/dev/null'
+
+# ---------- shell and tmux defaults (only written when missing) ----------
+if [ "$EXISTING" = 1 ]; then date -u +%FT%TZ > "$STATE/ready"; step "Ready"; exit 0; fi
+step "Writing shell defaults"
+if [ ! -f "$H/.zshrc" ] || ! grep -q skybuild "$H/.zshrc"; then
+  cat >> "$H/.zshrc" <<'ZSHRC'
+# --- skybuild defaults (yours to change) ---
+export PATH="$HOME/.local/bin:$HOME/.bun/bin:$PATH"
+HISTFILE=~/.zsh_history HISTSIZE=100000 SAVEHIST=100000
+setopt share_history hist_ignore_all_dups autocd interactive_comments prompt_subst
+autoload -Uz compinit && compinit -u
+autoload -Uz vcs_info && precmd() { vcs_info }
+zstyle ':vcs_info:git:*' formats ' %F{magenta}%b%f'
+PROMPT='%F{cyan}%m%f %F{blue}%~%f${vcs_info_msg_0_} %F{244}%#%f '
+bindkey -e
+alias ll='ls -lah --color=auto' ls='ls --color=auto' fd=fdfind
+ZSHRC
+fi
+if [ "$AUTO_TMUX" = 1 ] && ! grep -q 'skybuild tmux' "$H/.zshrc"; then
+  cat >> "$H/.zshrc" <<'TMUX'
+# >>> skybuild tmux: SSH logins land in tmux so sessions survive disconnects (SKY_NO_TMUX=1 skips) >>>
+if [[ -o interactive && -n "$SSH_TTY" && -z "$TMUX" && -z "$SKY_NO_TMUX" ]] && command -v tmux >/dev/null; then
+  if [[ -n "$(tmux list-clients -t main 2>/dev/null)" ]]; then exec tmux new-session; else exec tmux new-session -A -s main; fi
+fi
+# <<< skybuild tmux <<<
+TMUX
+fi
+if [ ! -f "$H/.tmux.conf" ]; then
+  cat > "$H/.tmux.conf" <<'TMUXCONF'
+{{.TmuxConf}}TMUXCONF
+fi
+touch "$H/.zshenv"
+if ! grep -q 'skybuild path' "$H/.zshenv"; then
+  { echo 'export PATH="$HOME/.local/bin:$HOME/.bun/bin:$PATH"  # skybuild path'; cat "$H/.zshenv"; } > "$H/.zshenv.sky" && mv "$H/.zshenv.sky" "$H/.zshenv"
+fi
+chown "$SKY_USER:$SKY_USER" "$H/.zshrc" "$H/.tmux.conf" "$H/.zshenv"
+
+date -u +%FT%TZ > "$STATE/ready"
+step "Ready"
