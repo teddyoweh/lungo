@@ -46,6 +46,10 @@ export function CheckClaudeAccounts() {
   return window['go']['main']['App']['CheckClaudeAccounts']();
 }
 
+export function CheckForUpdates() {
+  return window['go']['main']['App']['CheckForUpdates']();
+}
+
 export function ClaudeAccounts() {
   return window['go']['main']['App']['ClaudeAccounts']();
 }
@@ -366,6 +370,10 @@ export function RestartMachine(arg1) {
   return window['go']['main']['App']['RestartMachine'](arg1);
 }
 
+export function RestartToUpdate() {
+  return window['go']['main']['App']['RestartToUpdate']();
+}
+
 export function Reveal(arg1) {
   return window['go']['main']['App']['Reveal'](arg1);
 }
@@ -428,6 +436,10 @@ export function SetAPIKeySync(arg1, arg2) {
 
 export function SetAppIcon(arg1) {
   return window['go']['main']['App']['SetAppIcon'](arg1);
+}
+
+export function SetAutoUpdate(arg1) {
+  return window['go']['main']['App']['SetAutoUpdate'](arg1);
 }
 
 export function SetClaudeAccountEnabled(arg1, arg2) {
@@ -516,6 +528,10 @@ export function TestAPIKey(arg1) {
 
 export function Tunnels() {
   return window['go']['main']['App']['Tunnels']();
+}
+
+export function UpdateInfo() {
+  return window['go']['main']['App']['UpdateInfo']();
 }
 
 export function UseClaudeAccount(arg1) {

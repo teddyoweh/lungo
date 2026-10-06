@@ -29,6 +29,10 @@ var assets embed.FS
 var icon []byte
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "--install-update" {
+		installMain(os.Args[2:]) // the helper that puts an update in place (update.go)
+		return
+	}
 	osx.FixLocale() // before anything starts a program: tmux reads it
 	keepErrors()
 	stacksOnSignal()

@@ -29,6 +29,8 @@ export function Catalog(arg1:string):Promise<main.Catalog>;
 
 export function CheckClaudeAccounts():Promise<string>;
 
+export function CheckForUpdates():Promise<main.UpdateInfo>;
+
 export function ClaudeAccounts():Promise<Array<engine.ClaudeAccountView>>;
 
 export function ClaudeAutoSwitch():Promise<boolean>;
@@ -189,6 +191,8 @@ export function RestartClaude(arg1:string,arg2:string,arg3:string,arg4:string):P
 
 export function RestartMachine(arg1:string):Promise<string>;
 
+export function RestartToUpdate():Promise<void>;
+
 export function Reveal(arg1:string):Promise<void>;
 
 export function RevealPeeked(arg1:string):Promise<void>;
@@ -220,6 +224,8 @@ export function SetAPIKeyMachines(arg1:string,arg2:Array<string>):Promise<string
 export function SetAPIKeySync(arg1:string,arg2:boolean):Promise<string>;
 
 export function SetAppIcon(arg1:string):Promise<void>;
+
+export function SetAutoUpdate(arg1:boolean):Promise<void>;
 
 export function SetClaudeAccountEnabled(arg1:string,arg2:boolean):Promise<void>;
 
@@ -264,6 +270,8 @@ export function TerminalInfo(arg1:string):Promise<term.Probe>;
 export function TestAPIKey(arg1:string):Promise<main.KeyTest>;
 
 export function Tunnels():Promise<Array<engine.Tunnel>>;
+
+export function UpdateInfo():Promise<main.UpdateInfo>;
 
 export function UseClaudeAccount(arg1:string):Promise<string>;
 

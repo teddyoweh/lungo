@@ -403,6 +403,19 @@ export interface TermProbe {
   claude: boolean;
 }
 /** This window among the app's instances ("main" is the first one). */
+/** Which version this is and whether a newer one is on its way (see desktop/update.go). */
+export interface UpdateInfo {
+  current: string;
+  latest?: string;
+  state: "" | "checking" | "downloading" | "ready" | "error" | "off";
+  progress?: number;
+  notes?: string;
+  error?: string;
+  checkedAt?: string;
+  auto: boolean;
+  why?: string; // why this build can't update itself
+}
+
 export interface WindowInfo {
   id: string;
   primary: boolean;
@@ -595,6 +608,10 @@ export const api = {
   terminalInfo: (id: string) => call<TermProbe>("TerminalInfo", id),
   windowInfo: () => call<WindowInfo>("WindowInfo"),
   newWindow: () => call<void>("NewWindow"),
+  updateInfo: () => call<UpdateInfo>("UpdateInfo"),
+  checkForUpdates: () => call<UpdateInfo>("CheckForUpdates"),
+  setAutoUpdate: (on: boolean) => call<void>("SetAutoUpdate", on),
+  restartToUpdate: () => call<void>("RestartToUpdate"),
   newWindowWith: (layout: string) => call<void>("NewWindowWith", layout),
   windowHandoff: () => call<string>("WindowHandoff"),
   windowsCleared: (ids: string[]) => call<void>("WindowsCleared", ids),

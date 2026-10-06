@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Check } from "lucide-react";
 import { api, errText, type LocalTmuxInfo, type Settings } from "../lib/api";
-import { isDark, openWelcome, pickSkin, runOp, setState, setTermPrefs, setTheme, setZoom, termFontSize, toast, useStore, waitOp, ZOOM_MAX, ZOOM_MIN, type TermPrefs, type Theme } from "../lib/store";
+import { isDark, openWelcome, pickSkin, restartToUpdate, runOp, setState, setTermPrefs, setTheme, setZoom, termFontSize, toast, useStore, waitOp, ZOOM_MAX, ZOOM_MIN, type TermPrefs, type Theme } from "../lib/store";
 import { APP_ICONS } from "../lib/appicons";
 import { THEMES, type AppTheme } from "../lib/themes";
 import { cx, mod } from "../lib/util";
@@ -108,6 +108,7 @@ export function SettingsView() {
         </Group>
 
         <Continuity />
+        <Updates />
 
         <Group title="Welcome">
           <Row label="The welcome" hint="What Lungo is and how it works, in a few short stories. Also in Help ▸ Welcome to Lungo.">
@@ -411,6 +412,65 @@ function Continuity() {
           }}
         />
       </Row>
+    </Group>
+  );
+}
+
+/** This version, the newest, and whether Lungo keeps itself up to date. */
+function Updates() {
+  const u = useStore((s) => s.update);
+  const [checking, setChecking] = useState(false);
+  if (!u) return null;
+  const check = async () => {
+    setChecking(true);
+    try {
+      const now = await api.checkForUpdates();
+      setState({ update: now });
+      if (now.state === "" && now.latest) toast("info", "Lungo is up to date", `${now.current} is the newest version.`);
+      if (now.state === "error") toast("error", "Couldn't check for updates", now.error);
+    } catch (e) {
+      toast("error", "Couldn't check for updates", errText(e));
+    }
+    setChecking(false);
+  };
+  const status =
+    u.state === "off"
+      ? u.why
+      : u.state === "ready"
+        ? `${u.latest} is downloaded. It goes in when Lungo restarts; sessions keep running and every window comes back.`
+        : u.state === "downloading"
+          ? `Downloading ${u.latest}${u.progress ? ` · ${Math.round(u.progress * 100)}%` : ""}`
+          : u.state === "checking"
+            ? "Checking…"
+            : u.state === "error"
+              ? u.error
+              : u.checkedAt
+                ? `Up to date · checked ${new Date(u.checkedAt).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })}`
+                : "Up to date";
+  return (
+    <Group title="Updates">
+      <Row label={`Lungo ${u.current}`} hint={status}>
+        {u.state === "ready" ? (
+          <Button size="sm" variant="primary" onClick={restartToUpdate}>
+            Restart to update
+          </Button>
+        ) : (
+          <Button size="sm" variant="outline" loading={checking || u.state === "checking" || u.state === "downloading"} disabled={u.state === "off"} onClick={check}>
+            Check now
+          </Button>
+        )}
+      </Row>
+      {u.state !== "off" && (
+        <Row label="Update automatically" hint="New versions download in the background and go in when Lungo next restarts or quits.">
+          <Toggle
+            checked={u.auto}
+            onChange={(on) => {
+              setState({ update: { ...u, auto: on } });
+              api.setAutoUpdate(on).catch((e) => toast("error", "Couldn't change that", errText(e)));
+            }}
+          />
+        </Row>
+      )}
     </Group>
   );
 }

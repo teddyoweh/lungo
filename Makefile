@@ -4,7 +4,7 @@ LDFLAGS := -s -w -X main.version=$(VERSION)
 BIN     := $(HOME)/.local/bin
 export PATH := $(HOME)/go/bin:$(PATH)
 
-.PHONY: build install test vet cli-all desktop desktop-install clean
+.PHONY: build install test vet cli-all desktop desktop-install release clean
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o bin/sky ./cmd/sky
@@ -29,7 +29,7 @@ cli-all:
 	done
 
 desktop:
-	cd desktop && wails build -clean -ldflags "-X main.version=$(VERSION)"
+	cd desktop && wails build -clean -ldflags "-X main.Version=$(VERSION)"
 
 desktop-install: desktop
 	mkdir -p $(HOME)/Applications
@@ -39,6 +39,10 @@ desktop-install: desktop
 	@if [ -f $(HOME)/Applications/Skybuild.app/Contents/Info.plist ]; then rm -rf $(HOME)/Applications/Skybuild.app; fi
 	cp -R desktop/build/bin/Lungo.app $(HOME)/Applications/
 	@echo "installed ~/Applications/Lungo.app"
+
+# A release: `make release V=0.1.4 NOTES="…"` (see scripts/release.sh).
+release:
+	scripts/release.sh $(V) "$(NOTES)"
 
 clean:
 	rm -rf bin dist desktop/build/bin

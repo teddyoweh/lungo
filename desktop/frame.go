@@ -143,7 +143,9 @@ func (a *App) beforeClose(context.Context) bool {
 	}
 	frameSave.Unlock()
 	a.saveFrame()
-	a.win.leaving()
+	if a.win.leaving() {
+		a.installOnQuit() // a downloaded update goes in as the app quits
+	}
 	go wakeToQuit()
 	return false
 }

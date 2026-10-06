@@ -10,10 +10,10 @@ to those sessions.
 
 ```
 $ sky new api-box
-✓ Checking Compute Engine in core-spawn-490218        9s
-✓ VM created at 35.254.203.132                        18s
+✓ Checking Compute Engine in my-gcp-project           9s
+✓ VM created at 34.123.45.67                          18s
 ✓ Machine set up                                      3m12s
-✓ On the tailnet as api-box.tail124cf2.ts.net
+✓ On the tailnet as api-box.your-tailnet.ts.net
 ✓ api-box is ready. Connect with: ssh api-box
 
 $ sky claude api-box ~/code/api -p "fix the failing tests" -d

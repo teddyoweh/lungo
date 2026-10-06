@@ -48,6 +48,7 @@ type window struct {
 	// asked it to quit along (quitByPeer). Neither: the app is quitting.
 	closing    atomic.Bool
 	quitByPeer atomic.Bool
+	updating   atomic.Bool // an update is to be installed as the app quits (see startInstaller)
 }
 
 // validID: what a window id can be (it names files).
@@ -237,26 +238,32 @@ func (w *window) open(id string) error {
 		return err
 	}
 	if runtime.GOOS == "darwin" {
-		// …/Lungo.app/Contents/MacOS/Lungo → the bundle, opened as a new instance. A window
-		// of a build with its own home or tmux server opens in the same (open passes no
-		// environment on by itself).
+		// …/Lungo.app/Contents/MacOS/Lungo → the bundle, opened as a new instance.
 		if bundle := filepath.Dir(filepath.Dir(filepath.Dir(exe))); strings.HasSuffix(bundle, ".app") {
-			args := []string{"-n"}
-			pass := []string{"SKYBUILD_HOME", "SKY_TMUX_SOCKET"}
-			if os.Getenv("SKYBUILD_HOME") != "" {
-				pass = append(pass, "HOME") // a world of its own: ~/.ssh/config included
-			}
-			for _, k := range pass {
-				if v := os.Getenv(k); v != "" {
-					args = append(args, "--env", k+"="+v)
-				}
-			}
+			args := append([]string{"-n"}, sameWorld()...)
 			return reaped(exec.Command("open", append(args, bundle, "--args", "--window="+id)...))
 		}
 	}
 	cmd := exec.Command(exe, "--window="+id)
 	cmd.Env = append(os.Environ(), "SKY_WINDOW="+id)
 	return reaped(cmd)
+}
+
+// sameWorld is what `open` needs to start Lungo in the same world as this process: a build
+// with a home, a tmux server or an update feed of its own keeps them (open passes no
+// environment on by itself).
+func sameWorld() []string {
+	pass := []string{"SKYBUILD_HOME", "SKY_TMUX_SOCKET", "SKY_UPDATE_FEED"}
+	if os.Getenv("SKYBUILD_HOME") != "" {
+		pass = append(pass, "HOME") // a world of its own: ~/.ssh/config included
+	}
+	var args []string
+	for _, k := range pass {
+		if v := os.Getenv(k); v != "" {
+			args = append(args, "--env", k+"="+v)
+		}
+	}
+	return args
 }
 
 // reaped starts a command and collects it when it ends, so it doesn't linger as a zombie.
@@ -301,9 +308,10 @@ func (w *window) next() error {
 // leaving runs as the window goes. Closed with its close button while other windows stay
 // open, it is forgotten. Otherwise the app is quitting: it stays to come back, and ⌘Q (or
 // the Dock, or logging out) takes the other windows along, which stay to come back too.
-func (w *window) leaving() {
+// It reports whether this window is where the app quit.
+func (w *window) leaving() (appQuit bool) {
 	if !restores() {
-		return
+		return false
 	}
 	// Elsewhere closing the window is the only way a window goes.
 	closing := w.closing.Load() || runtime.GOOS != "darwin"
@@ -315,7 +323,9 @@ func (w *window) leaving() {
 		for pid := range others {
 			askToQuit(pid)
 		}
+		return true
 	}
+	return closing // the last window closed: the app quits with it
 }
 
 // forget drops this window for good: it won't come back, and its tabs and frame go (the

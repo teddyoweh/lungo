@@ -18,6 +18,7 @@ import {
   type APIKeyView,
   type TickResult,
   type WindowInfo,
+  type UpdateInfo,
   type GitInfo,
   type Port,
 } from "./api";
@@ -168,6 +169,7 @@ export interface State {
   sidebar: boolean; // sidebar shown
   zoom: number; // zoom level; 0 is the default size
   win: WindowInfo; // this window among the app's instances
+  update: UpdateInfo | null; // this version, and a newer one on its way
   winReady: boolean; // the window knows which one it is, so its own layout can be restored
   welcome: boolean; // the welcome is showing (the first time Lungo opens, or from Help)
   localTmux: boolean; // tmux is installed here: local panes are sessions that outlive the app
@@ -303,6 +305,7 @@ let state: State = {
   sidebar: readPref("sidebar") !== "0",
   zoom: loadZoom(),
   win: { id: MAIN, primary: true, count: 1 },
+  update: null,
   winReady: false,
   welcome: false,
   localTmux: false,
@@ -1619,6 +1622,8 @@ export function wireEvents() {
     });
   });
   on<SessionsView>("sessions", applySessions);
+  on<UpdateInfo>("update", (update) => setState({ update }));
+  api.updateInfo().then((update) => setState({ update }), () => {});
   // Another window sent the user here for a session this one shows, or took it.
   on<{ verb: string; machine: string; session: string }>("window-ask", ({ verb, machine, session }) => {
     const t = paneForSession(machine, session);
@@ -1642,4 +1647,9 @@ export function wireEvents() {
     if (w.error) toast("error", "Folder watch stopped", w.error);
   });
   window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => applyTheme(state.theme));
+}
+
+/** Installs the downloaded update: every window quits and comes back on the new version. */
+export function restartToUpdate() {
+  api.restartToUpdate().catch((e) => toast("error", "Couldn't update", errText(e)));
 }

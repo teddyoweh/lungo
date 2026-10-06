@@ -28,7 +28,8 @@ import (
 	"skybuild/internal/term"
 )
 
-// Version is set at build time with -ldflags "-X main.Version=…".
+// Version is set at build time with -ldflags "-X main.Version=…" (appVersion falls back to
+// the bundle's Info.plist).
 var Version = "dev"
 
 // App is bound to the frontend: every exported method is callable from TypeScript.
@@ -97,6 +98,7 @@ func (a *App) domReady(ctx context.Context) {
 	go engine.InstallLocalPeek()
 	go a.iconLoop(ctx)
 	go a.win.reopen()
+	go a.updateLoop(ctx)
 	go a.win.watchAsks(func(verb, machine, session string) {
 		wruntime.EventsEmit(ctx, "window-ask", map[string]string{"verb": verb, "machine": machine, "session": session})
 	})
@@ -140,7 +142,7 @@ type ProviderSketch struct {
 
 func (a *App) Info() AppInfo {
 	info := AppInfo{
-		Version: Version, Platform: runtime.GOOS, Home: paths.Home(), LocalUser: config.LocalUser(),
+		Version: appVersion(), Platform: runtime.GOOS, Home: paths.Home(), LocalUser: config.LocalUser(),
 		ConfigDir: paths.Root(), Terminals: osx.Terminals(), SyncItems: syncer.Items(), CredNames: syncer.CredentialNames(),
 		AppIcon: chosenIcon(),
 	}

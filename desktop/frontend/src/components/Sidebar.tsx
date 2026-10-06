@@ -32,6 +32,7 @@ import {
   openSessionTab,
   openInNewWindow,
   openHere,
+  restartToUpdate,
   paneForSession,
   openShellTab,
   opsRunning,
@@ -405,6 +406,7 @@ export function Sidebar() {
             })}
         </div>
       )}
+      <UpdateReady />
       <UsageFooter />
     </aside>
   );
@@ -453,6 +455,23 @@ function Section({ id, label, sessions, machines, activeKey, now }: { id: Bucket
             </div>
           );
         })}
+    </div>
+  );
+}
+
+/** A newer Lungo is downloaded: one quiet line, and a restart installs it. */
+function UpdateReady() {
+  const u = useStore((s) => s.update);
+  if (u?.state !== "ready") return null;
+  return (
+    <div className="anim-fade mx-2 mb-1 flex h-[26px] items-center gap-2 rounded-md pr-1 pl-2 text-[11.5px] text-muted">
+      <span className="size-[6px] shrink-0 rounded-full bg-accent" />
+      <span className="min-w-0 flex-1 truncate" title={u.notes || undefined}>
+        Lungo {u.latest} is ready
+      </span>
+      <button onClick={restartToUpdate} title="Sessions keep running and every window comes back" className="no-drag shrink-0 rounded px-1.5 py-0.5 font-medium text-accent hover:bg-hover">
+        Restart
+      </button>
     </div>
   );
 }
