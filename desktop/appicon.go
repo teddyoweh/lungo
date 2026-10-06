@@ -16,21 +16,21 @@ import (
 	"skybuild/internal/paths"
 )
 
-// The app's icon: Dawn, which the bundle carries (build/appicon.png), or one of the others
+// The app's icon: Redeye, which the bundle carries (build/appicon.png), or one of the others
 // picked in Settings. The pick is kept in ~/.skybuild/app-icon, so every window and the next
 // launch use it.
 
 //go:embed appicons/*.png
 var appIcons embed.FS
 
-const defaultIcon = "dawn"
+const defaultIcon = "redeye"
 
 // iconIDs are the icons in the order Settings shows them.
-var iconIDs = []string{"dawn", "phosphor", "pour", "keycap", "pressed", "sugar", "redeye", "lcd", "clay", "crystal"}
+var iconIDs = []string{"redeye", "dawn", "phosphor", "pour", "keycap", "pressed", "sugar", "lcd", "clay", "crystal"}
 
 func iconFile() string { return filepath.Join(paths.Root(), "app-icon") }
 
-// chosenIcon is the icon picked in Settings, or Dawn.
+// chosenIcon is the icon picked in Settings, or Redeye.
 func chosenIcon() string {
 	b, err := os.ReadFile(iconFile())
 	if id := strings.TrimSpace(string(b)); err == nil && slices.Contains(iconIDs, id) {

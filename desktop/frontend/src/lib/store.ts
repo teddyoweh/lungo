@@ -196,7 +196,8 @@ export interface State {
 
 // ---------- per-window preferences ----------
 // The first window ("main") owns the plain keys; windows opened from it get their own copy
-// of the layout, zoom and sidebar state, which is dropped when they close.
+// of the layout, zoom and sidebar state. A window closed for good has it cleared by the next
+// window to start (see clearForgotten).
 
 const MAIN = "main";
 let windowId = MAIN;
@@ -393,13 +394,16 @@ export function toastSession(x: Session) {
     toasts: [...s.toasts.filter((t) => !(t.kind === "session" && t.title === title && t.session?.machine === x.machine)), { id, kind: "session" as const, title, body, action: { label: "Open", run }, ms: waiting ? 12000 : 6000, session: { machine: x.machine, state: waiting ? ("waiting" as const) : ("done" as const), agent } }].slice(-5),
   }));
 }
+// Seen the welcome. Its name changes when the welcome should be shown again to everyone.
+const WELCOMED = "welcomed.0.1";
+
 /** The welcome, again (Help ▸ Welcome to Lungo, Settings). */
 export function openWelcome() {
   setState({ welcome: true, modal: null });
 }
 /** Done with the welcome: it doesn't come back by itself. */
 export function finishWelcome() {
-  writePref("welcomed", "1");
+  writePref(WELCOMED, "1");
   setState({ welcome: false });
 }
 export function dismissToast(id: number) {
@@ -607,7 +611,51 @@ function sessionPane(machine: string, session: string): Tab {
 export function openSessionTab(machine: string, session: string, where: "group" | Dir = "group") {
   const existing = paneForSession(machine, session);
   if (existing) return focusPane(existing.key);
-  placePane(sessionPane(machine, session), where);
+  // Open in another window: go there. Two windows on one session fight over its size.
+  void api
+    .focusSession(machine, session)
+    .catch(() => false)
+    .then((there) => {
+      if (!there && !paneForSession(machine, session)) placePane(sessionPane(machine, session), where);
+    });
+}
+
+/** Brings a session into this window, from the window that shows it when another does. */
+export function openHere(machine: string, session: string) {
+  const t = paneForSession(machine, session);
+  if (t) return focusPane(t.key);
+  void api
+    .takeSession(machine, session)
+    .catch(() => false)
+    .then(() => {
+      if (!paneForSession(machine, session)) placePane(sessionPane(machine, session));
+    });
+}
+
+/** Opens a session in a window of its own (taken from the window it is in, if any). */
+export function openInNewWindow(machine: string, session: string) {
+  const t = paneForSession(machine, session);
+  if (t) return moveToNewWindow(t.key);
+  void api
+    .takeSession(machine, session)
+    .catch(() => false)
+    .then(() => newWindowWith([sessionPane(machine, session)]));
+}
+
+/** Moves a pane into a new window; its session keeps running throughout. */
+export function moveToNewWindow(key: string) {
+  const t = state.tabs.find((x) => x.key === key);
+  if (!t) return;
+  newWindowWith([t], () => releaseTab(key));
+}
+
+function newWindowWith(tabs: Tab[], then?: () => void) {
+  const panes: SavedPane[] = tabs.map((t) => ({ key: t.key, kind: t.kind, machine: t.machine, session: t.session, title: t.title, cwd: t.cwd ?? t.spawn?.dir, sid: t.sid, flags: t.flags, claude: liveClaude(t), agent: t.agent }));
+  const layout = { panes, groups: [{ id: "g1", layout: { pane: tabs[0].key }, focus: tabs[0].key }], activeGroup: "g1" };
+  api.newWindowWith(JSON.stringify(layout)).then(
+    () => then?.(),
+    (e) => toast("error", "Couldn't open a window", errText(e)),
+  );
 }
 
 // ---------- putting sessions together ----------
@@ -856,10 +904,23 @@ const folderName = (dir: string) => {
 // says nothing a folder name doesn't say better.
 const HOSTY = /^[\w.-]+@[\w.-]+(:.*)?$/;
 const GENERIC = /^(claude( code)?|tmux)$/i; // Claude's title before it has a task
+const AGENT_STATUS = /^(action required|working|thinking|ready|idle|waiting|done)$/i;
 function ownTitle(t: Tab): string {
-  const own = t.termTitle?.trim() ?? "";
+  let own = t.termTitle?.trim() ?? "";
   if (!own || own === t.machine || HOSTY.test(own) || SHELLS.has(own) || GENERIC.test(own)) return "";
-  return own;
+  // Agents dress the title up: a spinner ("[ . ]"), a status and the folder around the task
+  // (Codex: "Action Required | Add rate limiting | api"), their own name after it (Grok).
+  own = own.replace(/^\[[^\]]{0,5}\]\s*/, "");
+  if (own.includes(" | ")) {
+    const folder = t.cwd ? folderName(t.cwd) : "";
+    own = own
+      .split(" | ")
+      .map((p) => p.trim())
+      .filter((p) => p && !AGENT_STATUS.test(p) && p !== folder)
+      .join(" | ");
+  }
+  own = own.replace(/\s+[-·]\s+(grok|codex|mantis)$/i, "").trim();
+  return GENERIC.test(own) ? "" : own;
 }
 
 /** The name to show for a pane: what its program calls itself, else its folder. */
@@ -1025,12 +1086,18 @@ export function updateTab(key: string, patch: Partial<Tab>) {
 /** Closes one pane; its group closes with its last pane. Sessions keep running in tmux. */
 export function closeTab(key: string) {
   const t = state.tabs.find((x) => x.key === key);
-  if (t?.termId) api.closeTerminal(t.termId);
   // A shell pane's session goes with it, and so does a Claude session's once Claude has
   // left it (the backend checks that only an idle shell is in it; anything running stays).
   const m = t && tabMachine(t);
   if (t && m && t.session && (t.kind === "shell" || t.session.startsWith(SHELL_PREFIX) || (t.session.startsWith("claude") && !liveClaude(t) && !!t.running)))
     api.closeShell(m, t.session).catch(() => {});
+  releaseTab(key);
+}
+
+/** Takes a pane away, leaving its session as it is (closing it, or moving it to another window). */
+function releaseTab(key: string) {
+  const t = state.tabs.find((x) => x.key === key);
+  if (t?.termId) api.closeTerminal(t.termId);
   setState((s) => {
     const tabs = s.tabs.filter((x) => x.key !== key);
     const g = groupOf(key, s);
@@ -1312,19 +1379,34 @@ export async function initWindow() {
     // The hidden window of a headless dev run opens nothing: its saved layout would attach
     // to the user's real sessions from a window nobody sees.
     dormant = !!win.headless && isNativeWebview();
+    clearForgotten(win.forgotten ?? []);
+    handoff = dormant ? "" : await api.windowHandoff().catch(() => "");
     const tmux = await api.localTmux().catch(() => null);
     const ws = readPref("workspace", false);
-    setState({ win, zoom, sidebar: readPref("sidebar") !== "0", winReady: true, welcome: !dormant && windowId === MAIN && readPref("welcomed") === null, localTmux: !!tmux?.installed, workspace: ws && state.workspaces.includes(ws) ? ws : null });
+    setState({ win, zoom, sidebar: readPref("sidebar") !== "0", winReady: true, welcome: !dormant && windowId === MAIN && readPref(WELCOMED) === null, localTmux: !!tmux?.installed, workspace: ws && state.workspaces.includes(ws) ? ws : null });
   } catch {
     setState({ winReady: true }); // a browser without the backend: stay "main"
   }
-  if (windowId !== MAIN) {
-    // A secondary window is forgotten when it closes.
-    window.addEventListener("pagehide", () => {
-      for (const name of [LAYOUT, "zoom", "sidebar", "workspace"]) writePref(name, null);
-    });
-  }
 }
+
+/** Clears what windows closed for good left in storage: their tabs and their own settings. */
+function clearForgotten(ids: string[]) {
+  const gone = ids.filter((id) => id !== windowId);
+  if (!gone.length) return;
+  try {
+    for (const id of gone) {
+      // The first window's zoom and sidebar are every new window's defaults: they stay.
+      const names = id === MAIN ? [LAYOUT, "workspace"] : [LAYOUT, "workspace", "zoom", "sidebar"];
+      for (const name of names) localStorage.removeItem(id === MAIN ? `sky.${name}` : `sky.${name}.${id}`);
+    }
+  } catch {
+    return; // storage unavailable: try again next time
+  }
+  api.windowsCleared(gone).catch(() => {});
+}
+
+// The panes this window was opened with by another ("Move to new window"), once.
+let handoff = "";
 
 // Layout persistence: every tab and pane comes back when the app reopens. Panes attach to
 // their sessions again by name; a session that is gone (the machine restarted, this computer
@@ -1340,22 +1422,20 @@ export function saveLayout() {
   const panes: SavedPane[] = state.tabs.map((t) => ({ key: t.key, kind: t.kind, machine: t.machine, session: t.session, title: t.title, cwd: t.cwd ?? t.spawn?.dir, sid: t.sid, flags: t.flags, claude: liveClaude(t), agent: t.agent, seen: aliveAt.get(t.key), at: t.key === state.activeTab ? Date.now() : lastActive.get(t.key) }));
   const groups = state.groups.map((g) => ({ ...g, zoom: false }));
   writePref(LAYOUT, JSON.stringify({ panes, groups, activeGroup: state.activeGroup }));
-  // The shells these panes point at are not for tidying up, attached right now or not.
-  const keep: Record<string, string[]> = {};
-  for (const t of state.tabs) {
-    const m = tabMachine(t);
-    if (m && t.session?.startsWith(SHELL_PREFIX)) (keep[m] ??= []).push(t.session);
-  }
-  const sig = JSON.stringify(keep);
+  // The sessions these panes show: another window asked to show one sends the user here,
+  // and the shells among them are not for tidying up, attached right now or not.
+  const keys = [...new Set(state.tabs.flatMap((t) => (tabMachine(t) && t.session ? [`${tabMachine(t)}/${t.session}`] : [])))].sort();
+  const sig = keys.join("\n");
   if (sig !== keptShells) {
     keptShells = sig;
-    api.keepShells(keep).catch(() => {});
+    api.windowSessions(keys).catch(() => {});
   }
 }
 
 export function restoreLayout(machineNames: string[]) {
   try {
-    const raw = readPref(LAYOUT, false);
+    const raw = handoff || readPref(LAYOUT, false);
+    handoff = "";
     if (!raw || state.tabs.length || dormant) return;
     const saved = JSON.parse(raw) as { panes: SavedPane[]; groups: Group[]; activeGroup?: string };
     const known = new Set(machineNames);
@@ -1539,6 +1619,13 @@ export function wireEvents() {
     });
   });
   on<SessionsView>("sessions", applySessions);
+  // Another window sent the user here for a session this one shows, or took it.
+  on<{ verb: string; machine: string; session: string }>("window-ask", ({ verb, machine, session }) => {
+    const t = paneForSession(machine, session);
+    if (!t) return;
+    if (verb === "show") focusPane(t.key);
+    if (verb === "release") releaseTab(t.key);
+  });
   // Sessions moved onto the account machines switched to (restarted with their conversation).
   on<{ count: number; names: string; account: string }>("claude:moved", (m) => {
     toast("info", `${m.count === 1 ? "A session" : `${m.count} sessions`} moved to ${m.account || "the new account"}`, `${m.names} restarted on the new login, conversation kept.`);

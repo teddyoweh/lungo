@@ -90,7 +90,8 @@ func localConf() (string, error) {
 
 // localPrelude makes `tmux` in a script mean sky's server on this computer. The variables
 // it drops belong to a Claude Code session the app may have been started from; a session
-// in a pane must not inherit them.
+// in a pane must not inherit them. -u: UTF-8 whatever the locale says (see osx.FixLocale),
+// so lists keep their tabs and panes their ✳ and box lines.
 func localPrelude() (string, error) {
 	tm := LocalTmux()
 	if tm == "" {
@@ -100,7 +101,7 @@ func localPrelude() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return "unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_SSE_PORT; tmux() { " + sshx.Quote(tm) + " -L " + sshx.Quote(localSocket()) + " -f " + sshx.Quote(conf) + ` "$@"; }; `, nil
+	return "unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_SSE_PORT; tmux() { " + sshx.Quote(tm) + " -u -L " + sshx.Quote(localSocket()) + " -f " + sshx.Quote(conf) + ` "$@"; }; `, nil
 }
 
 // localSh runs a script on this computer with `tmux` meaning sky's server.
@@ -181,7 +182,7 @@ func (e *Engine) LocalSessions(ctx context.Context) ([]Session, error) {
 		s := &sessions[i]
 		pid := procs.claudeUnder(shells[s.Name])
 		if pid == 0 {
-			s.State, s.Message = "", ""
+			s.State, s.Message, s.Agent = "", "", ""       // no agent running, whatever the program in the pane looked like
 			s.Claude = strings.HasPrefix(s.Name, "claude") // Claude has exited; a shell is in the pane now
 			if a := procs.agentUnder(shells[s.Name]); a != "" {
 				s.Claude, s.Agent, s.Command, s.State = false, a, a, "idle"

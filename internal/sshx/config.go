@@ -70,8 +70,13 @@ func WriteConfig(machines []*model.Machine, route func(*model.Machine) Route) er
 }
 
 // ensureInclude puts `Include ~/.skybuild/ssh_config` at the top of ~/.ssh/config.
-// It has to come first: ssh uses the first value it finds for each option.
+// It has to come first: ssh uses the first value it finds for each option. A sky home kept
+// apart from the user's (SKYBUILD_HOME elsewhere: a test, a staged demo) stays out of their
+// ssh config: its include would stay behind, ahead of the real one.
 func ensureInclude() error {
+	if r := os.Getenv("SKYBUILD_HOME"); r != "" && filepath.Clean(r) != filepath.Join(paths.Home(), ".skybuild") {
+		return nil
+	}
 	user := paths.UserSSHConfig()
 	cur, err := os.ReadFile(user)
 	if err != nil && !os.IsNotExist(err) {

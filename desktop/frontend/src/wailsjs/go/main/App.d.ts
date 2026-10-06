@@ -67,6 +67,8 @@ export function FillSpec(arg1:model.Spec):Promise<model.Spec>;
 
 export function FindFile(arg1:string,arg2:string,arg3:string,arg4:string):Promise<Array<engine.RemoteFile>>;
 
+export function FocusSession(arg1:string,arg2:string):Promise<boolean>;
+
 export function GrowDisk(arg1:string,arg2:number):Promise<string>;
 
 export function History(arg1:string):Promise<main.HistoryView>;
@@ -76,8 +78,6 @@ export function Info():Promise<main.AppInfo>;
 export function InstallTmux():Promise<string>;
 
 export function JoinTailscale(arg1:string):Promise<string>;
-
-export function KeepShells(arg1:Record<string, Array<string>>):Promise<void>;
 
 export function KillSession(arg1:string,arg2:string):Promise<void>;
 
@@ -106,6 +106,8 @@ export function MoveFolder(arg1:string,arg2:string,arg3:string):Promise<string>;
 export function NewSession(arg1:string,arg2:engine.SessionOptions):Promise<engine.Session>;
 
 export function NewWindow():Promise<void>;
+
+export function NewWindowWith(arg1:string):Promise<void>;
 
 export function NextWindow():Promise<void>;
 
@@ -253,6 +255,8 @@ export function TailscaleStatus():Promise<engine.TailscaleInfo>;
 
 export function TakeOverSync(arg1:string):Promise<string>;
 
+export function TakeSession(arg1:string,arg2:string):Promise<boolean>;
+
 export function Terminal(arg1:string):Promise<term.Info>;
 
 export function TerminalInfo(arg1:string):Promise<term.Probe>;
@@ -265,4 +269,10 @@ export function UseClaudeAccount(arg1:string):Promise<string>;
 
 export function WatchedLinks():Promise<Array<string>>;
 
+export function WindowHandoff():Promise<string>;
+
 export function WindowInfo():Promise<main.WindowInfo>;
+
+export function WindowSessions(arg1:Array<string>):Promise<void>;
+
+export function WindowsCleared(arg1:Array<string>):Promise<void>;

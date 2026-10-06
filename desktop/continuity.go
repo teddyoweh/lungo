@@ -70,14 +70,6 @@ func (p *poller) woke(ctx context.Context, slept time.Duration) {
 	p.refresh(ctx)
 }
 
-// KeepShells tells the app which shell sessions this window's panes point at (per machine),
-// so cleaning up idle shells never takes one a pane is about to reconnect to.
-func (a *App) KeepShells(keep map[string][]string) {
-	a.poll.mu.Lock()
-	a.poll.keep = keep
-	a.poll.mu.Unlock()
-}
-
 // ---------- tmux on this computer ----------
 
 // LocalTmuxInfo says whether sessions on this computer can outlive the app.

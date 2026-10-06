@@ -34,7 +34,7 @@ wails build -platform windows/amd64                 # cross-compiles from macOS 
 
 Linux builds need a Linux host with `libgtk-3-dev` and `libwebkit2gtk-4.1-dev`. Run `wails build -tags webkit2_41` there.
 
-The app icon is Dawn (`build/appicon.png`); the other icons people can pick in Settings are in `appicons/`, with small copies for the picker in `frontend/src/assets/app-icons/`. The pick is kept in `~/.skybuild/app-icon`. On macOS it shows in the Dock right away, in every window, and also becomes the app's icon in Finder so the Dock keeps it after quitting. On Linux it applies at the next launch.
+The app icon is Redeye (`build/appicon.png`); the other icons people can pick in Settings are in `appicons/`, with small copies for the picker in `frontend/src/assets/app-icons/`. The pick is kept in `~/.skybuild/app-icon`. On macOS it shows in the Dock right away, in every window, and also becomes the app's icon in Finder so the Dock keeps it after quitting. On Linux it applies at the next launch.
 
 The app was called Skybuild. It keeps that name where changing it would cost something: the bundle ID `com.wails.skybuild` (macOS keys the web view's storage and notification permission to it), `~/.skybuild`, the `skybuild` tmux socket and the names of cloud resources.
 

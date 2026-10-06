@@ -18,6 +18,8 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options/mac"
 	"github.com/wailsapp/wails/v2/pkg/options/windows"
 	wruntime "github.com/wailsapp/wails/v2/pkg/runtime"
+
+	"skybuild/internal/osx"
 )
 
 //go:embed all:frontend/dist
@@ -27,6 +29,7 @@ var assets embed.FS
 var icon []byte
 
 func main() {
+	osx.FixLocale() // before anything starts a program: tmux reads it
 	keepErrors()
 	stacksOnSignal()
 	app := NewApp()

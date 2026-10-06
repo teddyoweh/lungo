@@ -134,7 +134,8 @@ func (a *App) restoreFrame() {
 	}
 }
 
-// beforeClose saves the frame one last time; it never stops the window closing.
+// beforeClose saves the frame one last time and settles what the window going means (see
+// window.leaving); it never stops the window closing.
 func (a *App) beforeClose(context.Context) bool {
 	frameSave.Lock()
 	if frameSave.timer != nil {
@@ -142,19 +143,23 @@ func (a *App) beforeClose(context.Context) bool {
 	}
 	frameSave.Unlock()
 	a.saveFrame()
+	a.win.leaving()
+	go wakeToQuit()
 	return false
 }
 
-// forgetFrames drops what no longer has a window: a window opened from the first one is
-// gone for good once it closes, and the first window clears out any that didn't get to.
+// forgetFrames drops the frames of windows that are neither open nor to come back.
 func (a *App) forgetFrames() {
-	if !a.keepsFrame() {
+	if !a.keepsFrame() || !restores() {
 		return
 	}
-	live := a.win.ids()
+	keep := a.win.ids()
+	for _, id := range readSaved().IDs {
+		keep[id] = true
+	}
 	updateFrames(func(m map[string]frame) {
 		for id := range m {
-			if id != mainWindow && !live[id] {
+			if id != mainWindow && !keep[id] {
 				delete(m, id)
 			}
 		}

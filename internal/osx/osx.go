@@ -168,6 +168,49 @@ func FixPath() {
 	}()
 }
 
+// FixLocale gives the programs this process starts a UTF-8 locale when it has none. A macOS
+// app opened from Finder, the Dock or at login gets no LANG at all, and tmux then prints every
+// tab and non-ASCII character as "_": its session lists can't be read (no sessions show) and
+// attached panes lose ✳, ❯ and box lines. ssh passes LANG on (SendEnv), so machines get it too.
+func FixLocale() {
+	if runtime.GOOS == "windows" || isUTF8Locale() {
+		return
+	}
+	os.Setenv("LANG", preferredLocale())
+}
+
+// isUTF8Locale applies tmux's test: the first of LC_ALL, LC_CTYPE and LANG that is set names
+// UTF-8.
+func isUTF8Locale() bool {
+	for _, k := range []string{"LC_ALL", "LC_CTYPE", "LANG"} {
+		if v := os.Getenv(k); v != "" {
+			v = strings.ToUpper(v)
+			return strings.Contains(v, "UTF-8") || strings.Contains(v, "UTF8")
+		}
+	}
+	return false
+}
+
+// preferredLocale is the UTF-8 form of the language and region picked in System Settings
+// (what Terminal sets LANG to), else en_US.UTF-8; C.UTF-8 on Linux.
+func preferredLocale() string {
+	if runtime.GOOS != "darwin" {
+		return "C.UTF-8"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "/usr/bin/defaults", "read", "-g", "AppleLocale").Output()
+	if err == nil {
+		name, _, _ := strings.Cut(strings.TrimSpace(string(out)), "@") // "fr_FR@rg=usz…"
+		if name != "" {
+			if _, err := os.Stat(filepath.Join("/usr/share/locale", name+".UTF-8")); err == nil {
+				return name + ".UTF-8"
+			}
+		}
+	}
+	return "en_US.UTF-8"
+}
+
 var pathFixed atomic.Bool
 
 // fixPath asks the login shell for PATH once; it reports whether that worked.

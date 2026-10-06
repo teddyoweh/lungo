@@ -163,6 +163,16 @@ func agentScreenState(agent, screen string) (string, string) {
 			return "waiting", question()
 		}
 	default: // Mantis and others draw their prompts the way Claude does
+		// Mantis asks before a tool runs with "Allow? bash: … 1 allow once 2 allow for
+		// session 3 deny", under a spinner that still says "esc to interrupt": waiting.
+		if strings.Contains(lower, "allow once") || strings.Contains(lower, "(y/s/n") {
+			for i := len(tail) - 1; i >= 0; i-- {
+				if t := strings.TrimSpace(tail[i]); strings.HasPrefix(strings.ToLower(t), "allow?") {
+					return "waiting", t
+				}
+			}
+			return "waiting", name + " is asking to run a tool"
+		}
 		if state, msg := screenState(screen); state != "" {
 			if state == "waiting" && strings.HasPrefix(msg, "Claude") {
 				msg = name + strings.TrimPrefix(msg, "Claude")
@@ -177,6 +187,17 @@ func agentScreenState(agent, screen string) (string, string) {
 // name or the folder ("Fix the login bug | api", "Fix the login bug - grok").
 func agentTitle(agent, title, path string) string {
 	folder := filepath.Base(path)
+	// Codex: "Action Required | Add rate limiting | payments-api", the status and the
+	// folder on either side of the task.
+	if parts := strings.Split(title, " | "); len(parts) > 1 {
+		keep := parts[:0]
+		for _, p := range parts {
+			if p = strings.TrimSpace(p); p != "" && !agentStatus.MatchString(p) && p != folder {
+				keep = append(keep, p)
+			}
+		}
+		title = strings.Join(keep, " | ")
+	}
 	for _, sep := range []string{" | ", " - ", " · ", " — "} {
 		title = strings.TrimSuffix(title, sep+agent)
 		title = strings.TrimSuffix(title, sep+AgentName(agent))
@@ -193,6 +214,9 @@ type AgentVersion struct {
 	ID      string `json:"id"`
 	Version string `json:"version"`
 }
+
+// agentStatus is what an agent puts in its window title to say what it's doing.
+var agentStatus = regexp.MustCompile(`(?i)^(action required|working|thinking|ready|idle|waiting|done)$`)
 
 var versionNumber = regexp.MustCompile(`\d+\.\d+(\.\d+)?`)
 

@@ -55,3 +55,16 @@ func TestEnsureKey(t *testing.T) {
 		t.Error("key regenerated")
 	}
 }
+
+// A sky home kept apart (a test, a staged demo) never adds itself to the user's ssh config.
+func TestWriteConfigApartLeavesUserConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("SKYBUILD_HOME", filepath.Join(t.TempDir(), "stage"))
+	if err := WriteConfig(nil, func(*model.Machine) Route { return Route{} }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".ssh", "config")); err == nil {
+		t.Fatal("~/.ssh/config was written")
+	}
+}

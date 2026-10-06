@@ -32,6 +32,10 @@ func debugScreens() string { return "" }
 
 func neverActivate() {}
 
+func watchClose() {}
+
+func wakeToQuit() {}
+
 // setDockIcon: elsewhere the window icon is set at launch (main.go), from the pick.
 func setDockIcon([]byte, bool) {}
 

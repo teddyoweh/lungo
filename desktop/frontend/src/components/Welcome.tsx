@@ -840,7 +840,7 @@ function Go({ found }: { found: Found }) {
   const [where, setWhere] = useState(LOCAL);
   const dark = theme === "system" ? isDark() : theme === "dark";
   const themeName = THEMES.find((t) => t.id === (dark ? skins.dark : skins.light))?.name ?? "";
-  const iconName = APP_ICONS.find((i) => i.id === info?.appIcon)?.name ?? "Dawn";
+  const iconName = APP_ICONS.find((i) => i.id === info?.appIcon)?.name ?? "Redeye";
   const lines = [
     installed.length ? `${installed.length} agent${installed.length === 1 ? "" : "s"} ready: ${installed.map((a) => AGENT_NAMES[a]).join(", ")}` : "No agents yet: install one and it shows up",
     machines.length ? `This Mac and ${machines.length} machine${machines.length === 1 ? "" : "s"}` : "This Mac, with room for more machines",

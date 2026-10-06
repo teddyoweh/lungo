@@ -408,6 +408,7 @@ export interface WindowInfo {
   primary: boolean;
   count: number;
   headless?: boolean; // the app's own window is hidden and a browser drives the UI (dev checks)
+  forgotten?: string[]; // windows closed for good: their tabs are to be cleared from storage
 }
 
 /** One filesystem; sizes in bytes, pct as df counts it. */
@@ -566,7 +567,7 @@ export const api = {
   notify: (t: string, b: string) => call<void>("Notify", t, b),
 
   openSessionTerminal: (machine: string, session: string, o: AttachOptions, cols: number, rows: number) => call<TermInfo>("OpenSessionTerminal", machine, session, o, cols, rows),
-  keepShells: (keep: Record<string, string[]>) => call<void>("KeepShells", keep),
+  windowSessions: (keys: string[]) => call<void>("WindowSessions", keys),
   paneGit: (machine: string, dir: string) => call<GitInfo>("PaneGit", machine, dir),
   sessionPorts: (machine: string) => call<Record<string, Port[]>>("SessionPorts", machine),
   listFiles: (machine: string, dir: string) => call<string[]>("ListFiles", machine, dir),
@@ -594,6 +595,11 @@ export const api = {
   terminalInfo: (id: string) => call<TermProbe>("TerminalInfo", id),
   windowInfo: () => call<WindowInfo>("WindowInfo"),
   newWindow: () => call<void>("NewWindow"),
+  newWindowWith: (layout: string) => call<void>("NewWindowWith", layout),
+  windowHandoff: () => call<string>("WindowHandoff"),
+  windowsCleared: (ids: string[]) => call<void>("WindowsCleared", ids),
+  focusSession: (machine: string, session: string) => call<boolean>("FocusSession", machine, session),
+  takeSession: (machine: string, session: string) => call<boolean>("TakeSession", machine, session),
   nextWindow: () => call<void>("NextWindow"),
   saveWindowFrame: () => call<void>("SaveWindowFrame"),
 

@@ -29,6 +29,7 @@ import {
   setWorkspace,
   liveClaude,
   restartClaude,
+  moveToNewWindow,
 } from "../lib/store";
 import { launchRecipe, recipeWhere } from "./Recipes";
 import { askConfirm } from "./ContextMenu";
@@ -82,6 +83,10 @@ export function Palette({ onClose }: { onClose: () => void }) {
       act("local", "Terminal on this computer", <LocalIcon size={14} className="text-fg" />, () => openLocalTab(), `${mod}L`),
       act("needs-you", "Next session that needs you", <BellDot size={14} />, jumpNeedsYou, `${mod}J`),
       act("new-window", "New window", <AppWindow size={14} />, () => api.newWindow().catch((e) => toast("error", "Couldn't open a window", errText(e))), `⇧${mod}N`),
+      act("move-window", "Move this pane to a new window", <AppWindow size={14} />, () => {
+        const key = getState().activeTab;
+        if (key) moveToNewWindow(key);
+      }),
       act("sidebar", "Toggle sidebar", <PanelLeft size={14} />, toggleSidebar, `${mod}B`),
       act("zoom-in", "Zoom in", <ZoomIn size={14} />, () => setZoom(getState().zoom + 1), `${mod}+`),
       act("zoom-out", "Zoom out", <ZoomOut size={14} />, () => setZoom(getState().zoom - 1), `${mod}−`),

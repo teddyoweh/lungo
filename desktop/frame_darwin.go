@@ -13,3 +13,10 @@ func skyFrameChanged() {
 		mainApp.frameChanged()
 	}
 }
+
+//export skyWindowClosing
+func skyWindowClosing() {
+	if mainApp != nil {
+		mainApp.win.closing.Store(true)
+	}
+}

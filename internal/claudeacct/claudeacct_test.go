@@ -22,8 +22,14 @@ func TestApplyRateLimited(t *testing.T) {
 	if w := st.Windows["seven_day"]; w == nil || w.Utilization != 1.01 {
 		t.Fatalf("windows: %+v", st.Windows)
 	}
+	// The captured reset has passed by now: usability is about a reset still ahead or gone.
+	st.ResetsAt = time.Now().Add(time.Hour)
 	if st.Usable() {
 		t.Error("limited account in the future should not be usable")
+	}
+	st.ResetsAt = time.Now().Add(-time.Minute)
+	if !st.Usable() {
+		t.Error("limited account whose reset has passed should be usable")
 	}
 }
 

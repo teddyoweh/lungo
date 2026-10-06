@@ -25,6 +25,34 @@ static void skyCompactTitleBar(void) {
 	});
 }
 
+extern void skyWindowClosing(void);
+
+// The window's close button: Wails treats it as quitting the app (each window is an app of
+// its own), so the app is told first that this is a window being closed, not a quit.
+static void skyWatchClose(void) {
+	Class cls = NSClassFromString(@"WindowDelegate");
+	SEL sel = @selector(windowShouldClose:);
+	Method m = cls != nil ? class_getInstanceMethod(cls, sel) : NULL;
+	if (m == NULL) {
+		return;
+	}
+	BOOL (*orig)(id, SEL, id) = (BOOL (*)(id, SEL, id))method_getImplementation(m);
+	method_setImplementation(m, imp_implementationWithBlock(^BOOL(id me, id sender) {
+		skyWindowClosing();
+		return orig(me, sel, sender);
+	}));
+}
+
+// Wails stops the app from a background thread, and AppKit only notices on its next event:
+// with the app in the background that can be never (a quit from the Dock or another window
+// seemed ignored). An event of its own makes it notice now.
+static void skyWake(void) {
+	dispatch_async(dispatch_get_main_queue(), ^{
+		NSEvent *e = [NSEvent otherEventWithType:NSEventTypeApplicationDefined location:NSZeroPoint modifierFlags:0 timestamp:0 windowNumber:0 context:nil subtype:0 data1:0 data2:0];
+		[NSApp postEvent:e atStart:YES];
+	});
+}
+
 // A hidden dev instance stays out of the Dock and the app switcher.
 static void skyBackground(void) {
 	dispatch_async(dispatch_get_main_queue(), ^{
@@ -336,6 +364,7 @@ import "C"
 import (
 	"context"
 	"errors"
+	"time"
 	"unsafe"
 )
 
@@ -402,6 +431,17 @@ func debugScreens() string {
 	c := C.skyDebugScreens()
 	defer C.free(unsafe.Pointer(c))
 	return C.GoString(c)
+}
+
+// watchClose has the window's close button tell the app it is closing a window.
+func watchClose() { C.skyWatchClose() }
+
+// wakeToQuit makes sure the app does quit once Wails has told it to (see skyWake).
+func wakeToQuit() {
+	for range 20 {
+		time.Sleep(150 * time.Millisecond)
+		C.skyWake()
+	}
 }
 
 // neverActivate keeps a hidden dev instance from taking the keyboard when it launches.

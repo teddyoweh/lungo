@@ -122,6 +122,10 @@ export function FindFile(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['FindFile'](arg1, arg2, arg3, arg4);
 }
 
+export function FocusSession(arg1, arg2) {
+  return window['go']['main']['App']['FocusSession'](arg1, arg2);
+}
+
 export function GrowDisk(arg1, arg2) {
   return window['go']['main']['App']['GrowDisk'](arg1, arg2);
 }
@@ -140,10 +144,6 @@ export function InstallTmux() {
 
 export function JoinTailscale(arg1) {
   return window['go']['main']['App']['JoinTailscale'](arg1);
-}
-
-export function KeepShells(arg1) {
-  return window['go']['main']['App']['KeepShells'](arg1);
 }
 
 export function KillSession(arg1, arg2) {
@@ -200,6 +200,10 @@ export function NewSession(arg1, arg2) {
 
 export function NewWindow() {
   return window['go']['main']['App']['NewWindow']();
+}
+
+export function NewWindowWith(arg1) {
+  return window['go']['main']['App']['NewWindowWith'](arg1);
 }
 
 export function NextWindow() {
@@ -494,6 +498,10 @@ export function TakeOverSync(arg1) {
   return window['go']['main']['App']['TakeOverSync'](arg1);
 }
 
+export function TakeSession(arg1, arg2) {
+  return window['go']['main']['App']['TakeSession'](arg1, arg2);
+}
+
 export function Terminal(arg1) {
   return window['go']['main']['App']['Terminal'](arg1);
 }
@@ -518,6 +526,18 @@ export function WatchedLinks() {
   return window['go']['main']['App']['WatchedLinks']();
 }
 
+export function WindowHandoff() {
+  return window['go']['main']['App']['WindowHandoff']();
+}
+
 export function WindowInfo() {
   return window['go']['main']['App']['WindowInfo']();
+}
+
+export function WindowSessions(arg1) {
+  return window['go']['main']['App']['WindowSessions'](arg1);
+}
+
+export function WindowsCleared(arg1) {
+  return window['go']['main']['App']['WindowsCleared'](arg1);
 }

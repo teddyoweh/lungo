@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -79,10 +80,10 @@ func (a *App) startup(ctx context.Context) {
 	startIcon()
 	refreshLoginItem()
 	a.win.start()
+	a.win.onQuitAsked(func() { wruntime.Quit(ctx) })
+	watchClose()
 	a.restoreFrame()
-	if a.win.id == mainWindow {
-		a.forgetFrames()
-	}
+	a.forgetFrames()
 }
 
 // domReady starts the background work once the page is up and startup is through.
@@ -95,6 +96,10 @@ func (a *App) domReady(ctx context.Context) {
 	go engine.TidyPeek()
 	go engine.InstallLocalPeek()
 	go a.iconLoop(ctx)
+	go a.win.reopen()
+	go a.win.watchAsks(func(verb, machine, session string) {
+		wruntime.EventsEmit(ctx, "window-ask", map[string]string{"verb": verb, "machine": machine, "session": session})
+	})
 }
 
 func (a *App) shutdown(context.Context) {
@@ -1034,14 +1039,68 @@ type WindowInfo struct {
 	Count   int    `json:"count"`   // windows open right now
 	// Headless: the app's own window is hidden (SKY_HEADLESS) and a browser drives the UI.
 	Headless bool `json:"headless"`
+	// Forgotten: windows closed for good whose tabs are still in the page's storage, for
+	// the page to clear (then WindowsCleared).
+	Forgotten []string `json:"forgotten"`
 }
 
 func (a *App) WindowInfo() WindowInfo {
-	return WindowInfo{ID: a.win.id, Primary: a.win.primary.Load(), Count: len(a.win.pids()), Headless: os.Getenv("SKY_HEADLESS") != ""}
+	info := WindowInfo{ID: a.win.id, Primary: a.win.primary.Load(), Count: len(a.win.pids()), Headless: os.Getenv("SKY_HEADLESS") != "", Forgotten: []string{}}
+	if restores() {
+		info.Forgotten = append(info.Forgotten, readSaved().Forgotten...)
+	}
+	return info
+}
+
+// WindowsCleared: the page cleared what these forgotten windows left in its storage.
+func (a *App) WindowsCleared(ids []string) {
+	updateSaved(func(s *savedWindows) {
+		s.Forgotten = slices.DeleteFunc(s.Forgotten, func(x string) bool { return slices.Contains(ids, x) })
+	})
 }
 
 // NewWindow opens another Lungo window.
-func (a *App) NewWindow() error { return a.win.open() }
+func (a *App) NewWindow() error { return a.win.open("") }
+
+// NewWindowWith opens another window with panes taken from this one (a saved layout).
+func (a *App) NewWindowWith(layout string) error { return a.win.openWith(layout) }
+
+// WindowHandoff is the layout this window was opened with, once ("" when none).
+func (a *App) WindowHandoff() string { return a.win.takeHandoff() }
+
+// WindowSessions tells the app which sessions this window's panes show ("machine/session"):
+// another window asked to show one of them sends the user here, and shells any window
+// points at are never tidied away.
+func (a *App) WindowSessions(keys []string) {
+	a.win.setSessions(keys)
+	keep := map[string][]string{}
+	for _, k := range keys {
+		if m, s, ok := strings.Cut(k, "/"); ok && strings.HasPrefix(s, engine.ShellPrefix) {
+			keep[m] = append(keep[m], s)
+		}
+	}
+	a.poll.mu.Lock()
+	a.poll.keep = keep
+	a.poll.mu.Unlock()
+}
+
+// FocusSession brings forward the other window that shows a session and has it show it
+// there. False when no other window has it open.
+func (a *App) FocusSession(machine, session string) bool {
+	pid := a.win.holder(machine + "/" + session)
+	if pid == 0 || a.win.ask(pid, "show", machine+"/"+session) != nil {
+		return false
+	}
+	_ = activate(pid)
+	return true
+}
+
+// TakeSession has the other window that shows a session let it go, for this window to show
+// it instead. False when no other window has it open.
+func (a *App) TakeSession(machine, session string) bool {
+	pid := a.win.holder(machine + "/" + session)
+	return pid != 0 && a.win.ask(pid, "release", machine+"/"+session) == nil
+}
 
 // NextWindow brings the next Lungo window to the front.
 func (a *App) NextWindow() error { return a.win.next() }

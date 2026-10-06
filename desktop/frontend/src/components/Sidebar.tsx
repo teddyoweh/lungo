@@ -3,6 +3,8 @@
 // is doing; the list is grouped by what needs you (or by machine), and a filter narrows it.
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import {
+  AppWindow,
+  ArrowDownToLine,
   BrushCleaning,
   ChevronRight,
   Columns2,
@@ -28,6 +30,9 @@ import {
   tabMachine,
   openLocalTab,
   openSessionTab,
+  openInNewWindow,
+  openHere,
+  paneForSession,
   openShellTab,
   opsRunning,
   setState,
@@ -142,18 +147,27 @@ export function Sidebar() {
     setModeState(m);
   };
 
-  // Everything worth listing, narrowed by the filter. A shell sitting at its prompt is listed
-  // while it is open in a pane (so the pane you are in has its row), not once it is closed.
-  const openShells = useMemo(() => new Set(tabs.filter((t) => t.session && !t.exited).map((t) => `${tabMachine(t)}/${t.session}`)), [tabs]);
-  const sessions = useMemo(() => {
+  // Each window lists what it has open, like a terminal window its tabs. Everything else that
+  // is running (in another window, or in none) waits folded at the bottom: "Other sessions".
+  // A shell sitting at its prompt is listed only while a pane here shows it.
+  const here = useMemo(() => new Set(tabs.filter((t) => t.session && !t.exited).map((t) => `${tabMachine(t)}/${t.session}`)), [tabs]);
+  const hereCount = useMemo(() => sessionsView.sessions.filter((s) => here.has(keyOf(s))).length, [sessionsView, here]);
+  const [sessions, others] = useMemo(() => {
     const words = filter.toLowerCase().split(/\s+/).filter(Boolean);
-    return sessionsView.sessions.filter((s) => {
-      if (isIdleShell(s) && !openShells.has(`${s.machine}/${s.name}`)) return false;
+    const match = (s: Session) => {
       if (!words.length) return true;
       const text = [meta[sessionMetaKey(s.machine, s.name)]?.name, s.title, s.name, s.path, machineLabel(s.machine), s.branch].join(" ").toLowerCase();
       return words.every((w) => text.includes(w));
-    });
-  }, [sessionsView, filter, meta, openShells]);
+    };
+    const mine: Session[] = [];
+    const rest: Session[] = [];
+    for (const s of sessionsView.sessions) {
+      if (!match(s)) continue;
+      if (here.has(keyOf(s))) mine.push(s);
+      else if (!isIdleShell(s)) rest.push(s);
+    }
+    return [mine, rest.sort(byUrgency)];
+  }, [sessionsView, filter, meta, here]);
   const byMachine = useMemo(() => {
     const m: Record<string, Session[]> = {};
     for (const s of sessions) (m[s.machine] ??= []).push(s);
@@ -297,7 +311,7 @@ export function Sidebar() {
                 e.currentTarget.blur();
               }
             }}
-            placeholder={`Filter ${sessionsView.sessions.filter((s) => !isIdleShell(s) || openShells.has(`${s.machine}/${s.name}`)).length} sessions`}
+            placeholder={`Filter ${hereCount} session${hereCount === 1 ? "" : "s"}`}
             spellCheck={false}
             className="min-w-0 flex-1 bg-transparent text-[12px] text-fg outline-none placeholder:text-subtle"
           />
@@ -324,7 +338,8 @@ export function Sidebar() {
             {BUCKETS.map((b) => (
               <Section key={b.id} id={b.id} label={b.label} sessions={sessions.filter((s) => bucket(s) === b.id).sort(byUrgency)} machines={machines} activeKey={activeKey} now={now} />
             ))}
-            {sessions.length === 0 && <div className="px-2 py-6 text-center text-[11.5px] text-subtle">{filter ? "No session matches." : `No sessions running. ${mod}T starts one.`}</div>}
+            {sessions.length === 0 && <div className="px-2 py-6 text-center text-[11.5px] text-subtle">{filter ? (others.length ? "Nothing here matches." : "No session matches.") : others.length ? `Nothing open in this window. ${mod}T starts a session.` : `No sessions running. ${mod}T starts one.`}</div>}
+            <OtherSessions sessions={others} machines={machines} filtering={!!filter} activeKey={activeKey} now={now} />
           </>
         ) : (
           <>
@@ -340,6 +355,7 @@ export function Sidebar() {
               <MachineGroup key={mv.machine.name} mv={mv} sessions={byMachine[mv.machine.name] ?? []} error={sessionsView.errors[mv.machine.name]} activeKey={activeKey} now={now} />
             ))}
             <LocalGroup sessions={byMachine[LOCAL] ?? []} activeKey={activeKey} now={now} />
+            <OtherSessions sessions={others} machines={machines} filtering={!!filter} activeKey={activeKey} now={now} />
           </>
         )}
       </div>
@@ -433,6 +449,60 @@ function Section({ id, label, sessions, machines, activeKey, now }: { id: Bucket
               </div>
               {mine.map((s) => (
                 <SessionRow key={`${s.machine}/${s.name}`} s={s} activeKey={activeKey} now={now} grouped />
+              ))}
+            </div>
+          );
+        })}
+    </div>
+  );
+}
+
+/**
+ * The sessions running that this window doesn't show: in another window, or in none. Folded
+ * by default (unfolded while filtering). A click goes to the window that shows one, or opens
+ * it here when no window does; "Open in this window" brings one over.
+ */
+function OtherSessions({ sessions, machines, filtering, activeKey, now }: { sessions: Session[]; machines: MachineView[]; filtering: boolean; activeKey: string; now: number }) {
+  const [open, setOpenState] = useState(() => pref("sky.sidebar.open.others", "0") === "1");
+  if (sessions.length === 0) return null;
+  const shown = open || filtering;
+  const needs = sessions.filter((s) => hasAgent(s) && s.state === "waiting").length;
+  const setOpen = (v: boolean) => {
+    setPref("sky.sidebar.open.others", v ? "1" : "0");
+    setOpenState(v);
+  };
+  return (
+    <div className="mt-4">
+      <div className="group flex h-[24px] items-center pr-0.5 pl-2">
+        <button
+          onClick={() => setOpen(!open)}
+          title="Running, but not in this window: a click goes to the window that has it, or opens it here"
+          className="no-drag flex min-w-0 flex-1 items-center gap-1.5 text-[11.5px] font-medium text-subtle hover:text-fg"
+        >
+          <span>Other sessions</span>
+          <span className="text-[10.5px] font-normal tabular-nums">{sessions.length}</span>
+          {needs > 0 && !shown && (
+            <span className="flex shrink-0 items-center gap-[3px] text-[10.5px] text-warn tabular-nums" title={`${needs} need${needs === 1 ? "s" : ""} you`}>
+              <span className="size-[5px] rounded-full bg-warn" />
+              {needs}
+            </span>
+          )}
+          <ChevronRight size={10} className={cx("shrink-0 opacity-0 transition group-hover:opacity-100", shown && "rotate-90")} />
+        </button>
+      </div>
+      {shown &&
+        [...machines.map((m) => m.machine.name), LOCAL].map((name) => {
+          const mine = sessions.filter((s) => s.machine === name);
+          if (!mine.length) return null;
+          const m = machines.find((x) => x.machine.name === name)?.machine;
+          return (
+            <div key={name} className="mt-1 first:mt-0">
+              <div className="flex h-[22px] items-center gap-2 pl-2 text-[10.5px] text-subtle">
+                <span className="flex w-[15px] justify-center opacity-80">{m ? <ProviderIcon provider={m.provider} os={m.os} size={11} /> : <LocalIcon size={11} />}</span>
+                <span className="truncate">{m ? m.name : "This Mac"}</span>
+              </div>
+              {mine.map((s) => (
+                <SessionRow key={`${s.machine}/${s.name}`} s={s} activeKey={activeKey} now={now} />
               ))}
             </div>
           );
@@ -616,6 +686,8 @@ function sessionMenu(s: Session): MenuRow[] {
   return [
     { label: "Open", icon: <SquareTerminal size={13} />, onClick: () => openSessionTab(s.machine, s.name) },
     { label: "Open in a split", icon: <Columns2 size={13} />, hint: "⌥-click", onClick: () => openSessionTab(s.machine, s.name, "row") },
+    ...(paneForSession(s.machine, s.name) ? [] : [{ label: "Open in this window", icon: <ArrowDownToLine size={13} />, onClick: () => openHere(s.machine, s.name) }]),
+    { label: "Open in new window", icon: <AppWindow size={13} />, onClick: () => openInNewWindow(s.machine, s.name) },
     "sep",
     {
       label: "Rename…",

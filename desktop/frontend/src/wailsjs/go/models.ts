@@ -1558,6 +1558,7 @@ export namespace main {
 	    primary: boolean;
 	    count: number;
 	    headless: boolean;
+	    forgotten: string[];
 	
 	    static createFrom(source: any = {}) {
 	        return new WindowInfo(source);
@@ -1569,6 +1570,7 @@ export namespace main {
 	        this.primary = source["primary"];
 	        this.count = source["count"];
 	        this.headless = source["headless"];
+	        this.forgotten = source["forgotten"];
 	    }
 	}
 

@@ -731,11 +731,13 @@ func (e *Engine) TerminalConnCloser(machine string) func() {
 	}
 }
 
+// A pane is a UTF-8 terminal: -u keeps Claude's ✳ and box lines when the machine's login
+// has no UTF-8 locale.
 func attachScript(session string, o AttachOptions) string {
-	return attachScriptWith("exec tmux", session, o)
+	return attachScriptWith("exec tmux -u", session, o)
 }
 
-// attachScriptWith is attachScript with the command that ends it: "exec tmux" on a machine,
+// attachScriptWith is attachScript with the command that ends it: "exec tmux -u" on a machine,
 // plain "tmux" on this computer, where tmux is a shell function for sky's own server.
 func attachScriptWith(final, session string, o AttachOptions) string {
 	name := sshx.Quote(session)

@@ -9,11 +9,11 @@ import (
 
 func TestAttachScript(t *testing.T) {
 	// Attaching to a session that exists changes nothing about it; one that doesn't is made in the home folder.
-	if got := attachScript("main", AttachOptions{}); got != `s='main'; cd "$HOME"; if ! tmux has-session -t "=$s" 2>/dev/null; then tmux new-session -d -s "$s" -c "$PWD" && tmux set-option -t "=$s:" status off >/dev/null 2>&1; fi; exec tmux attach-session -t "=$s"` {
+	if got := attachScript("main", AttachOptions{}); got != `s='main'; cd "$HOME"; if ! tmux has-session -t "=$s" 2>/dev/null; then tmux new-session -d -s "$s" -c "$PWD" && tmux set-option -t "=$s:" status off >/dev/null 2>&1; fi; exec tmux -u attach-session -t "=$s"` {
 		t.Errorf("plain attach: %q", got)
 	}
 	shell := attachScript("shell-ab12", AttachOptions{Dir: "~/code/my api"})
-	for _, want := range []string{`s='shell-ab12'`, `cd "$HOME"/'code/my api' 2>/dev/null || { cd "$HOME"; gone='~/code/my api'; }`, `tmux has-session -t "=$s"`, `tmux new-session -d -s "$s" -c "$PWD" && tmux set-option -t "=$s:" status off >/dev/null 2>&1; fi`, `exec tmux attach-session -t "=$s"`} {
+	for _, want := range []string{`s='shell-ab12'`, `cd "$HOME"/'code/my api' 2>/dev/null || { cd "$HOME"; gone='~/code/my api'; }`, `tmux has-session -t "=$s"`, `tmux new-session -d -s "$s" -c "$PWD" && tmux set-option -t "=$s:" status off >/dev/null 2>&1; fi`, `exec tmux -u attach-session -t "=$s"`} {
 		if !strings.Contains(shell, want) {
 			t.Errorf("shell script misses %q:\n%s", want, shell)
 		}
@@ -22,7 +22,7 @@ func TestAttachScript(t *testing.T) {
 		t.Errorf("shell script starts claude:\n%s", shell)
 	}
 	claude := attachScript("claude-api", AttachOptions{Dir: "/srv/api", Claude: true})
-	for _, want := range []string{`cd '/srv/api'`, `line='claude'; tmux new-session`, `if [ -n "$gone" ]; then tmux send-keys -t "=$s:" "# skybuild: $gone is not there any more, so nothing was started" Enter; else tmux send-keys -t "=$s:" "$line" Enter; fi`, "trust this folder", `& fi; exec tmux attach-session`} {
+	for _, want := range []string{`cd '/srv/api'`, `line='claude'; tmux new-session`, `if [ -n "$gone" ]; then tmux send-keys -t "=$s:" "# skybuild: $gone is not there any more, so nothing was started" Enter; else tmux send-keys -t "=$s:" "$line" Enter; fi`, "trust this folder", `& fi; exec tmux -u attach-session`} {
 		if !strings.Contains(claude, want) {
 			t.Errorf("claude script misses %q:\n%s", want, claude)
 		}
@@ -67,7 +67,7 @@ func TestAttachScript(t *testing.T) {
 		t.Errorf("a resumed session takes no first message:\n%s", again)
 	}
 	cmd := attachScript("shell-ab12", AttachOptions{Dir: "/srv/api", Run: "npm run dev\nrm -rf /"})
-	if !strings.Contains(cmd, `line='npm run dev'; tmux new-session`) || !strings.Contains(cmd, `else tmux send-keys -t "=$s:" "$line" Enter; fi; fi; exec tmux attach`) || strings.Contains(cmd, "rm -rf") {
+	if !strings.Contains(cmd, `line='npm run dev'; tmux new-session`) || !strings.Contains(cmd, `else tmux send-keys -t "=$s:" "$line" Enter; fi; fi; exec tmux -u attach`) || strings.Contains(cmd, "rm -rf") {
 		t.Errorf("run script:\n%s", cmd)
 	}
 	// On this computer tmux is a shell function, which exec would bypass.
@@ -130,6 +130,9 @@ func TestOtherAgents(t *testing.T) {
 	if st, _ := agentScreenState("mantis", "❯ fix it\n✳ Levitating… (1s · esc to interrupt)\n❯"); st != "working" {
 		t.Errorf("mantis working: %q", st)
 	}
+	if st, msg := agentScreenState("mantis", "· Transmuting… (220s · esc to interrupt)\n❯\nAllow? bash: git ls-files\n 1 allow once   2 allow for session   3 deny   (y/s/n · enter)"); st != "waiting" || msg != "Allow? bash: git ls-files" {
+		t.Errorf("mantis permission: %q %q", st, msg)
+	}
 	if st, _ := agentScreenState("grok", "│ ❯\n  Shift+Tab:mode  │  Esc:cancel  │  Ctrl+.:shortcuts"); st != "working" {
 		t.Errorf("grok working: %q", st)
 	}
@@ -180,6 +183,7 @@ func TestAgentTitles(t *testing.T) {
 		{"codex", "Reply with pineapple | agenttest", "/tmp/agenttest", "Reply with pineapple"},
 		{"grok", "Exact pineapple word reply request - grok", "/tmp/agenttest", "Exact pineapple word reply request"},
 		{"mantis", "Fix a - b bug", "/tmp/api", "Fix a - b bug"},
+		{"codex", "Action Required | Add customer charge rate limiting | payments-api", "/home/t/payments-api", "Add customer charge rate limiting"},
 	} {
 		if got := agentTitle(c[0], c[1], c[2]); got != c[3] {
 			t.Errorf("agentTitle(%q, %q) = %q, want %q", c[0], c[1], got, c[3])

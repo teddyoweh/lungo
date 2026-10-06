@@ -2,7 +2,7 @@
 // in one flat list and only moved with CSS, so splitting, resizing or switching tabs never
 // re-mounts a terminal.
 import { memo, useRef } from "react";
-import { SquareArrowOutUpRight, ArrowDownToLine, ArrowUpFromLine, Columns2, Copy, Files, Folder, FolderOpen, GitBranch, Globe, Maximize2, Monitor, MoreVertical, RotateCcw, Rows2, SquareTerminal, X } from "lucide-react";
+import { AppWindow, SquareArrowOutUpRight, ArrowDownToLine, ArrowUpFromLine, Columns2, Copy, Files, Folder, FolderOpen, GitBranch, Globe, Maximize2, Monitor, MoreVertical, RotateCcw, Rows2, SquareTerminal, X } from "lucide-react";
 import { api, errText, type Port, type Session } from "../lib/api";
 import { showMenu } from "./ContextMenu";
 import { setDragged } from "../lib/drag";
@@ -18,6 +18,7 @@ import {
   LOCAL,
   machineLabel,
   moveToOwnTab,
+  moveToNewWindow,
   openSessionTab,
   paneFolder,
   paneTitle,
@@ -279,6 +280,7 @@ function PaneMenu({ tab }: { tab: Tab }) {
         { label: "Start an agent here…", icon: <AgentIcon agent="codex" size={13} />, onClick: () => setState({ modal: { type: "new-session", machine: tab.kind === "local" ? LOCAL : tab.machine, dir: tab.cwd } }) },
         { label: "Zoom", icon: <Maximize2 size={13} />, hint: `⇧${mod}↩`, onClick: here(toggleZoom) },
         { label: "Move to its own tab", icon: <SquareArrowOutUpRight size={13} />, onClick: () => moveToOwnTab(tab.key) },
+        { label: "Move to new window", icon: <AppWindow size={13} />, onClick: () => moveToNewWindow(tab.key) },
         ...(attachable.length ? (["sep"] as const) : []),
         ...attachable.map((s) => ({
           label: `Open ${s.title || s.name}`,

@@ -15,6 +15,7 @@ import (
 	"skybuild/internal/bootstrap"
 	"skybuild/internal/engine"
 	"skybuild/internal/events"
+	"skybuild/internal/osx"
 )
 
 var version = "dev"
@@ -27,6 +28,7 @@ var (
 )
 
 func main() {
+	osx.FixLocale() // run from launchd (sync --background) there is no LANG, and tmux needs one
 	cobra.EnableCommandSorting = false
 	bootstrap.Version = version
 	root := &cobra.Command{

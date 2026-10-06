@@ -27,7 +27,7 @@ type poller struct {
 	local      []engine.Session  // this computer's part
 	states     map[string]string // session key → last Claude state
 	primed     bool
-	keep       map[string][]string // shell sessions open panes point at, per machine
+	keep       map[string][]string // shell sessions this window's panes point at, per machine
 	quietSince time.Time           // start, or the last wake: no tidying right after
 	// When a refresh of the machines and one of this computer started (zero: none running).
 	// A refresh that runs far too long no longer holds the next one back: see begin.
@@ -110,7 +110,7 @@ func (p *poller) run(ctx context.Context) {
 			p.mu.Unlock()
 			// Not right after a start or a wake: panes are still finding their shells again.
 			if p.a.win.primary.Load() && settled {
-				go p.a.eng.ReapShells(ctx, keep)
+				go p.a.eng.ReapShells(ctx, p.a.win.keepAll(keep)) // every window's shells, not only this one's
 			}
 		}
 	}
