@@ -449,9 +449,7 @@ function Section({ id, label, sessions, machines, activeKey, now }: { id: Bucket
                 <span className="truncate">{m ? m.name : "This Mac"}</span>
                 {mine.length > 1 && <span className="tabular-nums opacity-70">{mine.length}</span>}
               </div>
-              {mine.map((s) => (
-                <SessionRow key={`${s.machine}/${s.name}`} s={s} activeKey={activeKey} now={now} grouped />
-              ))}
+              <SessionRows list={mine} activeKey={activeKey} now={now} grouped />
             </div>
           );
         })}
@@ -681,9 +679,7 @@ function MachineGroup({ mv, sessions, error, activeKey, now }: { mv: MachineView
               Start a session
             </button>
           )}
-          {sessions.map((s) => (
-            <SessionRow key={`${s.machine}/${s.name}`} s={s} activeKey={activeKey} now={now} />
-          ))}
+          <SessionRows list={sessions} activeKey={activeKey} now={now} />
         </div>
       )}
     </div>
@@ -792,6 +788,60 @@ const mainBranch = (b?: string) => !b || b === "main" || b === "master";
  * the tab it is open in shows while the pointer is over the row. grouped: it sits under a
  * status heading, which already says "needs you" or "working".
  */
+/**
+ * The rows of a list of sessions. Sessions open together in one tab (split panes) stay side
+ * by side on one soft tile, the way a browser shows a tab group; the tile is lit while that
+ * tab is the one in front. The tile sits where the list puts its most urgent session.
+ */
+function SessionRows({ list, activeKey, now, grouped }: { list: Session[]; activeKey: string; now: number; grouped?: boolean }) {
+  const tabs = useStore((x) => x.tabs);
+  const groups = useStore((x) => x.groups);
+  const activeGroup = useStore((x) => x.activeGroup);
+  const view = useStore((x) => x.view);
+  const runs = useMemo(() => {
+    // The tab of each session that shares its tab with another, and its place in the tab.
+    const paneSession = new Map<string, string>();
+    for (const t of tabs) {
+      const m = tabMachine(t);
+      if (m && t.session) paneSession.set(t.key, `${m}/${t.session}`);
+    }
+    const tabOf = new Map<string, { id: string; at: number }>();
+    for (const g of groups) {
+      const keys = [...new Set(leaves(g.layout).flatMap((k) => paneSession.get(k) ?? []))];
+      if (keys.length < 2) continue;
+      keys.forEach((k, at) => tabOf.has(k) || tabOf.set(k, { id: g.id, at }));
+    }
+    const out: { tab?: string; rows: Session[] }[] = [];
+    const placed = new Set<string>();
+    for (const s of list) {
+      if (placed.has(keyOf(s))) continue;
+      const t = tabOf.get(keyOf(s));
+      const rows = t ? list.filter((x) => tabOf.get(keyOf(x))?.id === t.id).sort((a, b) => tabOf.get(keyOf(a))!.at - tabOf.get(keyOf(b))!.at) : [s];
+      rows.forEach((x) => placed.add(keyOf(x)));
+      out.push({ tab: rows.length > 1 ? t!.id : undefined, rows });
+    }
+    return out;
+  }, [list, tabs, groups]);
+  return (
+    <>
+      {runs.map((r) =>
+        r.tab ? (
+          <div
+            key={r.tab}
+            className={cx("my-[3px] rounded-lg transition-colors", r.tab === activeGroup && view === "sessions" ? "bg-[color-mix(in_srgb,var(--fg)_6%,transparent)]" : "bg-[color-mix(in_srgb,var(--fg)_3%,transparent)]")}
+          >
+            {r.rows.map((s) => (
+              <SessionRow key={keyOf(s)} s={s} activeKey={activeKey} now={now} grouped={grouped} />
+            ))}
+          </div>
+        ) : (
+          <SessionRow key={keyOf(r.rows[0])} s={r.rows[0]} activeKey={activeKey} now={now} grouped={grouped} />
+        ),
+      )}
+    </>
+  );
+}
+
 function SessionRow({ s, activeKey, now, grouped }: { s: Session; activeKey: string; now: number; grouped?: boolean }) {
   const view = useStore((x) => x.view);
   const meta = useStore((x) => x.meta[sessionMetaKey(s.machine, s.name)]);
@@ -918,7 +968,7 @@ function LocalGroup({ sessions, activeKey, now }: { sessions: Session[]; activeK
           </>
         }
       />
-      {open && sessions.map((s) => <SessionRow key={`${s.machine}/${s.name}`} s={s} activeKey={activeKey} now={now} />)}
+      {open && <SessionRows list={sessions} activeKey={activeKey} now={now} />}
     </div>
   );
 }
