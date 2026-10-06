@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode } from "react";
 import { Check, ChevronDown, Copy, Loader2, X } from "lucide-react";
 import { api } from "../lib/api";
 import { toast, toggleSidebar, useStore } from "../lib/store";
@@ -263,34 +263,41 @@ const tones = {
   violet: "bg-violet",
 };
 
-/** Where the sparks of one cloud sit, how big each is (in screen pixels) and how it flickers. */
-function sparkCloud(n: number) {
-  // The same cloud every time: a small generator with a fixed seed.
-  let seed = 11;
-  const rnd = () => ((seed = (seed * 16807) % 2147483647) - 1) / 2147483646;
-  // Spread evenly over the disc (a sunflower's pattern), each nudged off its place so it
-  // reads as a scatter rather than a spiral.
-  return Array.from({ length: n }, (_, i) => {
-    const a = i * 2.39996323 + (rnd() - 0.5) * 0.9;
-    const d = Math.sqrt((i + 0.5) / n) * 10.2 + (rnd() - 0.5) * 1.6;
-    return { x: 12 + Math.cos(a) * d, y: 12 + Math.sin(a) * d, r: 0.32 + rnd() * 0.34, t: 0.9 + rnd() * 1.5, d: -rnd() * 2.4 };
-  });
+// Claude Code's own working glyphs, out and back. ✳ asks for its text form, or macOS draws an emoji.
+const SPARK_FRAMES = ["·", "✢", "✳\uFE0E", "✶", "✻", "✽", "✻", "✶", "✳\uFE0E", "✢"];
+
+// One clock for every mark on screen, so they all turn together; it runs only while one is shown.
+// With reduced motion the mark holds still on ✻.
+const STILL = matchMedia("(prefers-reduced-motion: reduce)").matches;
+let sparkFrame = 0;
+const sparkSubs = new Set<() => void>();
+let sparkTimer: number | undefined;
+function subscribeSpark(fn: () => void) {
+  sparkSubs.add(fn);
+  if (sparkTimer === undefined && !STILL) {
+    sparkTimer = window.setInterval(() => {
+      sparkFrame = (sparkFrame + 1) % SPARK_FRAMES.length;
+      sparkSubs.forEach((f) => f());
+    }, 120);
+  }
+  return () => {
+    sparkSubs.delete(fn);
+    if (sparkSubs.size) return;
+    window.clearInterval(sparkTimer);
+    sparkTimer = undefined;
+  };
 }
-const CLOUDS = { small: sparkCloud(10), medium: sparkCloud(17), large: sparkCloud(30) };
 
 /**
- * The "working" mark: a small cloud of sparks that flicker while the cloud slowly turns, the
- * way an agent's loader does. It takes the text colour (green where a session is working).
+ * The "working" mark: Claude's asterisk, cycling ·✢✳✶✻✽ the way Claude Code does in its own
+ * terminal. It takes the text colour (green where a session is working).
  */
 export function Sparks({ size = 12, className }: { size?: number; className?: string }) {
-  const dots = size < 10 ? CLOUDS.small : size < 18 ? CLOUDS.medium : CLOUDS.large;
-  const k = 24 / size; // spark sizes are in screen pixels, whatever the size of the cloud
+  const frame = useSyncExternalStore(subscribeSpark, () => sparkFrame);
   return (
-    <svg viewBox="0 0 24 24" width={size} height={size} role="img" aria-label="Working" className={cx("sparks shrink-0", className)}>
-      {dots.map((p, i) => (
-        <circle key={i} cx={p.x} cy={p.y} r={p.r * k} fill="currentColor" style={{ animationDuration: `${p.t}s`, animationDelay: `${p.d}s` }} />
-      ))}
-    </svg>
+    <span role="img" aria-label="Working" style={{ width: size, height: size, fontSize: size }} className={cx("sparks", className)}>
+      {STILL ? "✻" : SPARK_FRAMES[frame]}
+    </span>
   );
 }
 

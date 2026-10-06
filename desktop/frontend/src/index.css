@@ -209,41 +209,13 @@ select:focus-visible {
   animation: sky-pulse 1.6s ease-out infinite;
 }
 
-/* The working mark (Sparks): each spark flickers at its own pace, the cloud turns slowly. */
+/* The working mark (Sparks): one glyph at a time, centred in a square so the line never shifts. */
 .sparks {
-  overflow: visible;
-  animation: sky-sparks-turn 9s linear infinite;
-  filter: drop-shadow(0 0 0.8px color-mix(in srgb, currentColor 55%, transparent));
-}
-.sparks circle {
-  transform-box: fill-box;
-  transform-origin: center;
-  animation: sky-spark 1.4s ease-in-out infinite;
-}
-@keyframes sky-spark {
-  0%,
-  100% {
-    opacity: 0.14;
-    transform: scale(0.6);
-  }
-  50% {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-@keyframes sky-sparks-turn {
-  to {
-    transform: rotate(360deg);
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .sparks,
-  .sparks circle {
-    animation: none;
-  }
-  .sparks circle {
-    opacity: 0.85;
-  }
+  display: inline-grid;
+  place-items: center;
+  flex-shrink: 0;
+  line-height: 1;
+  font-family: "SF Mono", Menlo, monospace;
 }
 
 @keyframes sky-in {
