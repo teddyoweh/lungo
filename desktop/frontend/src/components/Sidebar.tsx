@@ -1014,8 +1014,8 @@ function SessionRow({ s, activeKey, now, grouped, where = true }: { s: Session; 
   const shell = isIdleShell(s); // a shell at its prompt, open in a pane
   const own = folderName(tildePath(s.path, s.machine === LOCAL ? home : undefined));
   const title = meta?.name || (shell ? own || "~" : s.title || s.name);
-  // In a tab's group the heading says the folder and branch the sessions share.
-  const folder = where ? own : "";
+  // The folder is on every row, in a tab's group too; the branch the group shares is left off.
+  const folder = own;
   const branchShown = where && !mainBranch(s.branch);
   const when = ago(new Date(sessionTime(s) || now).toISOString(), now);
   const state = grouped ? "" : b === "waiting" ? "needs you" : b === "working" ? "working" : b === "done" ? "ended" : "";
@@ -1059,8 +1059,9 @@ function SessionRow({ s, activeKey, now, grouped, where = true }: { s: Session; 
           {state && (
             <>
               <span className={cx("flex shrink-0 items-center gap-[5px]", b === "waiting" ? "text-warn" : b === "working" ? "text-ok" : undefined)}>
+                {/* working is the mark alone, so the folder keeps the room */}
                 {b === "working" ? <WorkingMark size={13} /> : b === "waiting" ? <span className="size-[5px] rounded-full bg-warn" /> : null}
-                {state}
+                {b !== "working" && state}
               </span>
               {(folder || branchShown) && dot}
             </>
