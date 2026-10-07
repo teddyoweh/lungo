@@ -32,6 +32,8 @@ import {
   openSessionTab,
   openInNewWindow,
   openHere,
+  paneTitle,
+  focusGroup,
   restartToUpdate,
   paneForSession,
   openShellTab,
@@ -40,6 +42,7 @@ import {
   useStore,
   type View,
   type State,
+  type Group,
   focusPane,
   isIdleShell,
   paneContext,
@@ -789,9 +792,9 @@ const mainBranch = (b?: string) => !b || b === "main" || b === "master";
  * status heading, which already says "needs you" or "working".
  */
 /**
- * The rows of a list of sessions. Sessions open together in one tab (split panes) stay side
- * by side on one soft tile, the way a browser shows a tab group; the tile is lit while that
- * tab is the one in front. The tile sits where the list puts its most urgent session.
+ * The rows of a list of sessions. Sessions open together in one tab (split panes) are shown as
+ * that tab: its name and ⊞ count as in the tab bar, its sessions nested under it. A click on
+ * the name goes to the tab. The group sits where the list puts its most urgent session.
  */
 function SessionRows({ list, activeKey, now, grouped }: { list: Session[]; activeKey: string; now: number; grouped?: boolean }) {
   const tabs = useStore((x) => x.tabs);
@@ -811,33 +814,48 @@ function SessionRows({ list, activeKey, now, grouped }: { list: Session[]; activ
       if (keys.length < 2) continue;
       keys.forEach((k, at) => tabOf.has(k) || tabOf.set(k, { id: g.id, at }));
     }
-    const out: { tab?: string; rows: Session[] }[] = [];
+    const out: { group?: Group; title?: string; panes?: number; rows: Session[] }[] = [];
     const placed = new Set<string>();
     for (const s of list) {
       if (placed.has(keyOf(s))) continue;
       const t = tabOf.get(keyOf(s));
       const rows = t ? list.filter((x) => tabOf.get(keyOf(x))?.id === t.id).sort((a, b) => tabOf.get(keyOf(a))!.at - tabOf.get(keyOf(b))!.at) : [s];
       rows.forEach((x) => placed.add(keyOf(x)));
-      out.push({ tab: rows.length > 1 ? t!.id : undefined, rows });
+      const g = t && rows.length > 1 ? groups.find((x) => x.id === t.id) : undefined;
+      const focus = g && tabs.find((x) => x.key === g.focus);
+      out.push(g ? { group: g, title: focus ? paneTitle(focus) : "", panes: leaves(g.layout).length, rows } : { rows });
     }
     return out;
   }, [list, tabs, groups]);
   return (
     <>
-      {runs.map((r) =>
-        r.tab ? (
-          <div
-            key={r.tab}
-            className={cx("my-[3px] rounded-lg transition-colors", r.tab === activeGroup && view === "sessions" ? "bg-[color-mix(in_srgb,var(--fg)_6%,transparent)]" : "bg-[color-mix(in_srgb,var(--fg)_3%,transparent)]")}
-          >
-            {r.rows.map((s) => (
-              <SessionRow key={keyOf(s)} s={s} activeKey={activeKey} now={now} grouped={grouped} />
-            ))}
+      {runs.map((r) => {
+        if (!r.group) return <SessionRow key={keyOf(r.rows[0])} s={r.rows[0]} activeKey={activeKey} now={now} grouped={grouped} />;
+        const g = r.group;
+        const front = g.id === activeGroup && view === "sessions";
+        return (
+          <div key={g.id} className="my-[3px]">
+            <button
+              onClick={() => focusGroup(g.id)}
+              title={`One tab, ${r.panes} panes side by side: click to go to it`}
+              className={cx("no-drag flex h-[24px] w-full items-center gap-2 rounded-md pr-2 pl-2 text-left text-[11.5px] transition-colors hover:bg-hover", front ? "text-fg" : "text-muted hover:text-fg")}
+            >
+              <span className="flex w-[15px] shrink-0 justify-center">
+                <Columns2 size={12} className={front ? "text-fg" : "text-subtle"} />
+              </span>
+              <span className="min-w-0 flex-1 truncate font-medium">{r.title}</span>
+              <span className="shrink-0 text-[10.5px] text-subtle tabular-nums">{r.panes}</span>
+            </button>
+            {/* the tab's sessions, nested on a guide line under its name */}
+            <div className="relative ml-[15px] pl-[5px]">
+              <span className={cx("absolute top-[3px] bottom-[3px] left-0 w-px rounded-full", front ? "bg-[color-mix(in_srgb,var(--fg)_35%,transparent)]" : "bg-[color-mix(in_srgb,var(--fg)_14%,transparent)]")} />
+              {r.rows.map((s) => (
+                <SessionRow key={keyOf(s)} s={s} activeKey={activeKey} now={now} grouped={grouped} />
+              ))}
+            </div>
           </div>
-        ) : (
-          <SessionRow key={keyOf(r.rows[0])} s={r.rows[0]} activeKey={activeKey} now={now} grouped={grouped} />
-        ),
-      )}
+        );
+      })}
     </>
   );
 }
