@@ -36,6 +36,11 @@ import {
   focusGroup,
   restartToUpdate,
   paneForSession,
+  placeSessionBy,
+  placePaneBy,
+  separateGroup,
+  closeGroup,
+  sessionFor,
   openShellTab,
   opsRunning,
   setState,
@@ -56,9 +61,10 @@ import {
   visibleGroups,
   openTogether,
 } from "../lib/store";
-import { setDragged } from "../lib/drag";
+import { getDragged, setDragged } from "../lib/drag";
 import { openScreen } from "../lib/screen";
-import { leaves } from "../lib/panes";
+import { leaves, type Layout } from "../lib/panes";
+import { tabMenu } from "../views/Sessions";
 import { appIconSrc } from "../lib/appicons";
 import { agentOf, ago, cx, hasAgent, mod, sessionTime, sessionTone, tildePath } from "../lib/util";
 import { IconButton, SidebarToggle, Sparks, Spinner, useNow } from "./ui";
@@ -829,38 +835,171 @@ function SessionRows({ list, activeKey, now, grouped }: { list: Session[]; activ
   }, [list, tabs, groups]);
   return (
     <>
-      {runs.map((r) => {
-        if (!r.group) return <SessionRow key={keyOf(r.rows[0])} s={r.rows[0]} activeKey={activeKey} now={now} grouped={grouped} />;
-        const g = r.group;
-        const front = g.id === activeGroup && view === "sessions";
-        return (
-          <div key={g.id} className="my-[3px]">
-            <button
-              onClick={() => focusGroup(g.id)}
-              title={`One tab, ${r.panes} panes side by side: click to go to it`}
-              className={cx("no-drag flex h-[24px] w-full items-center gap-2 rounded-md pr-2 pl-2 text-left text-[11.5px] transition-colors hover:bg-hover", front ? "text-fg" : "text-muted hover:text-fg")}
-            >
-              <span className="flex w-[15px] shrink-0 justify-center">
-                <Columns2 size={12} className={front ? "text-fg" : "text-subtle"} />
-              </span>
-              <span className="min-w-0 flex-1 truncate font-medium">{r.title}</span>
-              <span className="shrink-0 text-[10.5px] text-subtle tabular-nums">{r.panes}</span>
-            </button>
-            {/* the tab's sessions, nested on a guide line under its name */}
-            <div className="relative ml-[15px] pl-[5px]">
-              <span className={cx("absolute top-[3px] bottom-[3px] left-0 w-px rounded-full", front ? "bg-[color-mix(in_srgb,var(--fg)_35%,transparent)]" : "bg-[color-mix(in_srgb,var(--fg)_14%,transparent)]")} />
-              {r.rows.map((s) => (
-                <SessionRow key={keyOf(s)} s={s} activeKey={activeKey} now={now} grouped={grouped} />
-              ))}
-            </div>
-          </div>
-        );
-      })}
+      {runs.map((r) =>
+        r.group ? (
+          <TabGroup key={r.group.id} group={r.group} title={r.title ?? ""} rows={r.rows} activeKey={activeKey} now={now} grouped={grouped} front={r.group.id === activeGroup && view === "sessions"} />
+        ) : (
+          <SessionRow key={keyOf(r.rows[0])} s={r.rows[0]} activeKey={activeKey} now={now} grouped={grouped} />
+        ),
+      )}
     </>
   );
 }
 
-function SessionRow({ s, activeKey, now, grouped }: { s: Session; activeKey: string; now: number; grouped?: boolean }) {
+/**
+ * A tab with several sessions, shown as that tab: a small map of its split (the focused pane
+ * solid, one that needs you amber, one working green), its name, and what its sessions share
+ * (folder, branch), so their rows only say what differs. It acts like the tab: a click goes
+ * there, right-click is the tab's menu, the chevron folds it (folded, it still says what
+ * needs you), and a session dropped on it joins the split.
+ */
+function TabGroup({ group: g, title, rows, activeKey, now, grouped, front }: { group: Group; title: string; rows: Session[]; activeKey: string; now: number; grouped?: boolean; front: boolean }) {
+  const tabs = useStore((x) => x.tabs);
+  const sessions = useStore((x) => x.sessions.sessions);
+  const home = useStore((x) => x.info?.home);
+  const [folded, setFolded] = useState(false);
+  const [over, setOver] = useState(false);
+  const panes = leaves(g.layout);
+  const needs = rows.filter((s) => hasAgent(s) && s.state === "waiting").length;
+  const working = rows.some((s) => hasAgent(s) && s.state === "working");
+  // What every session in the tab shares goes on the heading, once.
+  const folders = new Set(rows.map((s) => folderName(tildePath(s.path, s.machine === LOCAL ? home : undefined))));
+  const branches = new Set(rows.map((s) => s.branch ?? ""));
+  const folder = folders.size === 1 ? [...folders][0] : "";
+  const branch = branches.size === 1 ? [...branches][0] : "";
+  const shared = folders.size === 1 && branches.size === 1;
+  const tone = (key: string): "waiting" | "working" | "" => {
+    const x = sessionFor(tabs.find((t) => t.key === key), sessions);
+    return x && hasAgent(x) && (x.state === "waiting" || x.state === "working") ? x.state : "";
+  };
+  const focusTab = tabs.find((t) => t.key === g.focus);
+  const drop = (e: React.DragEvent) => {
+    const d = getDragged();
+    setOver(false);
+    if (!d) return;
+    e.preventDefault();
+    const target = panes[panes.length - 1];
+    if (d.pane) placePaneBy(d.pane, target, "row", true);
+    else if (d.machine && d.session) {
+      if (!paneForSession(d.machine, d.session)) void api.takeSession(d.machine, d.session).catch(() => false);
+      placeSessionBy(d.machine, d.session, target, "row", true);
+    }
+    setDragged(null);
+  };
+  return (
+    <div className="my-[3px]">
+      <div
+        onClick={() => focusGroup(g.id)}
+        onContextMenu={(e) => focusTab && showMenu(e, tabMenu(g, focusTab))}
+        onDragOver={(e) => {
+          if (getDragged()) {
+            e.preventDefault();
+            setOver(true);
+          }
+        }}
+        onDragLeave={() => setOver(false)}
+        onDrop={drop}
+        title={`One tab, ${panes.length} panes side by side. Click to go to it, right-click for the tab's menu, drop a session here to add it.`}
+        className={cx(
+          "group/tab no-drag flex h-[26px] cursor-default items-center gap-2 rounded-md pr-1 pl-2 transition-colors",
+          over ? "bg-[color-mix(in_srgb,var(--accent)_18%,transparent)]" : "hover:bg-hover",
+        )}
+      >
+        <span className="flex w-[15px] shrink-0 justify-center">
+          <LayoutMap layout={g.layout} focus={g.focus} tone={tone} front={front} />
+        </span>
+        <span className="flex min-w-0 flex-1 items-center gap-1.5 text-[11.5px]">
+          <span className={cx("min-w-0 truncate font-medium", front ? "text-fg" : "text-muted group-hover/tab:text-fg")}>{title}</span>
+          {shared && folder && folder !== title && !folder.endsWith(`/${title}`) && <span className="min-w-0 shrink truncate text-[11px] text-subtle">{folder}</span>}
+          {shared && !mainBranch(branch) && (
+            <span className="flex min-w-0 shrink items-center gap-[2px] text-[11px] text-subtle">
+              <GitBranch size={9.5} className="shrink-0 opacity-80" />
+              <span className="truncate">{branch}</span>
+            </span>
+          )}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setFolded(!folded);
+            }}
+            title={folded ? "Show its sessions" : "Fold"}
+            className="flex size-4 shrink-0 items-center justify-center rounded text-subtle opacity-0 group-hover/tab:opacity-100 hover:text-fg"
+          >
+            <ChevronRight size={10} className={cx("transition", !folded && "rotate-90")} />
+          </button>
+        </span>
+        {/* Folded, it still says what needs you; otherwise the pane count, and the tab's buttons on hover. */}
+        <span className="flex shrink-0 items-center gap-1 pr-1 text-[10.5px] text-subtle tabular-nums group-hover/tab:hidden">
+          {folded && needs > 0 ? (
+            <span className="flex items-center gap-[3px] font-medium text-warn">
+              <span className="size-[5px] rounded-full bg-warn" />
+              {needs}
+            </span>
+          ) : folded && working ? (
+            <Sparks size={12} className="text-ok" />
+          ) : (
+            panes.length
+          )}
+        </span>
+        <span className="hidden shrink-0 items-center group-hover/tab:flex" onClick={(e) => e.stopPropagation()}>
+          <IconButton label="Separate into tabs" className="size-6" onClick={() => separateGroup(g.id)}>
+            <Columns2 size={12} />
+          </IconButton>
+          <IconButton label="Close this tab (sessions keep running)" className="size-6" onClick={() => closeGroup(g.id)}>
+            <X size={12} />
+          </IconButton>
+        </span>
+      </div>
+      {!folded && (
+        <div className="relative ml-[15px] pl-[5px]">
+          <span className={cx("absolute top-[3px] bottom-[3px] left-0 w-px rounded-full", front ? "bg-[color-mix(in_srgb,var(--fg)_35%,transparent)]" : "bg-[color-mix(in_srgb,var(--fg)_14%,transparent)]")} />
+          {rows.map((s) => (
+            <SessionRow key={keyOf(s)} s={s} activeKey={activeKey} now={now} grouped={grouped} where={!shared} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** A tab's split in miniature: a block per pane, laid out as the panes are. */
+function LayoutMap({ layout, focus, tone, front }: { layout: Layout; focus: string; tone: (key: string) => "waiting" | "working" | ""; front: boolean }) {
+  const W = 15;
+  const H = 11;
+  const gap = 1.5;
+  const blocks: { key: string; x: number; y: number; w: number; h: number }[] = [];
+  const walk = (l: Layout, x: number, y: number, w: number, h: number) => {
+    if ("pane" in l) {
+      blocks.push({ key: l.pane, x, y, w, h });
+      return;
+    }
+    const row = l.dir === "row";
+    const room = (row ? w : h) - gap * (l.children.length - 1);
+    let at = row ? x : y;
+    l.children.forEach((c, i) => {
+      const size = room * (l.sizes[i] ?? 1 / l.children.length);
+      if (row) walk(c, at, y, size, h);
+      else walk(c, x, at, w, size);
+      at += size + gap;
+    });
+  };
+  walk(layout, 0, 0, W, H);
+  const fill = (key: string) => {
+    const t = tone(key);
+    if (t === "waiting") return "var(--amber)";
+    if (t === "working") return "var(--green)";
+    return key === focus ? `color-mix(in srgb, var(--fg) ${front ? 85 : 55}%, transparent)` : "color-mix(in srgb, var(--fg) 22%, transparent)";
+  };
+  return (
+    <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} aria-hidden>
+      {blocks.map((b) => (
+        <rect key={b.key} x={b.x} y={b.y} width={Math.max(b.w, 1)} height={Math.max(b.h, 1)} rx={1.5} style={{ fill: fill(b.key) }} />
+      ))}
+    </svg>
+  );
+}
+
+function SessionRow({ s, activeKey, now, grouped, where = true }: { s: Session; activeKey: string; now: number; grouped?: boolean; where?: boolean }) {
   const view = useStore((x) => x.view);
   const meta = useStore((x) => x.meta[sessionMetaKey(s.machine, s.name)]);
   const home = useStore((x) => x.info?.home);
@@ -871,8 +1010,11 @@ function SessionRow({ s, activeKey, now, grouped }: { s: Session; activeKey: str
   const color = colorValue(meta?.color);
   const b = bucket(s);
   const shell = isIdleShell(s); // a shell at its prompt, open in a pane
-  const folder = folderName(tildePath(s.path, s.machine === LOCAL ? home : undefined));
-  const title = meta?.name || (shell ? folder || "~" : s.title || s.name);
+  const own = folderName(tildePath(s.path, s.machine === LOCAL ? home : undefined));
+  const title = meta?.name || (shell ? own || "~" : s.title || s.name);
+  // In a tab's group the heading says the folder and branch the sessions share.
+  const folder = where ? own : "";
+  const branchShown = where && !mainBranch(s.branch);
   const when = ago(new Date(sessionTime(s) || now).toISOString(), now);
   const state = grouped ? "" : b === "waiting" ? "needs you" : b === "working" ? "working" : b === "done" ? "ended" : "";
   const dot = <span className="opacity-50">·</span>;
@@ -918,12 +1060,12 @@ function SessionRow({ s, activeKey, now, grouped }: { s: Session; activeKey: str
                 {b === "working" ? <Sparks size={13} /> : b === "waiting" ? <span className="size-[5px] rounded-full bg-warn" /> : null}
                 {state}
               </span>
-              {(folder || !mainBranch(s.branch)) && dot}
+              {(folder || branchShown) && dot}
             </>
           )}
           {/* the folder keeps its room; a long branch is what gets cut */}
           {shell ? <span className="shrink-0">{s.command}</span> : folder && <span className="max-w-[62%] shrink-0 truncate">{folder}</span>}
-          {!mainBranch(s.branch) && (
+          {branchShown && (
             <span className="flex min-w-0 items-center gap-[2px]">
               <GitBranch size={9.5} className="shrink-0 opacity-80" />
               <span className="truncate">{s.branch}</span>
@@ -931,7 +1073,7 @@ function SessionRow({ s, activeKey, now, grouped }: { s: Session; activeKey: str
           )}
           {!state && (
             <>
-              {(folder || !mainBranch(s.branch)) && dot}
+              {(folder || branchShown) && dot}
               <span className="shrink-0 tabular-nums">{when}</span>
             </>
           )}

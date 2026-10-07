@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, AppWindow, BellDot, Columns2, Copy, ExternalLink, Layers, Maximize2, Minimize2, MoreHorizontal, Pencil, Pin, PinOff, Plus, RotateCcw, Rows2, Search, SquareTerminal, Trash2, X } from "lucide-react";
 import { api, call, errText, type Session } from "../lib/api";
-import { closeGroup, closeTab, focusGroup, getState, isIdleShell, jumpNeedsYou, loadSessions, needsYou, newTab, openLocalTab, openSessionTab, openShellTab, paneFolder, paneTitle, reattachTab, sessionFor, setState, splitPane, toast, toggleZoom, updateTab, useStore, type Group, type Tab, persistent, tabMachine, machineLabel, SHELL_PREFIX, gitKey, visibleGroups, setWorkspace, addWorkspace, renameWorkspace, removeWorkspace, moveToWorkspace, closeOtherGroups, togglePin, metaKey, setMeta, colorValue, COLORS, recipeFrom, liveClaude, restartClaude, placeSessionBy, combineGroups, placePaneBy, moveToOwnTab, separateGroup, openAgentTab, LOCAL } from "../lib/store";
+import { closeGroup, closeTab, focusGroup, getState, isIdleShell, jumpNeedsYou, loadSessions, needsYou, newTab, openLocalTab, openSessionTab, openShellTab, paneFolder, paneTitle, reattachTab, sessionFor, setState, splitPane, toast, toggleZoom, updateTab, useStore, type Group, type Tab, persistent, tabMachine, machineLabel, SHELL_PREFIX, gitKey, visibleGroups, setWorkspace, addWorkspace, renameWorkspace, removeWorkspace, moveToWorkspace, closeOtherGroups, togglePin, metaKey, setMeta, colorValue, COLORS, recipeFrom, liveClaude, restartClaude, placeSessionBy, combineGroups, placePaneBy, moveToOwnTab, separateGroup, moveGroupToNewWindow, openAgentTab, LOCAL } from "../lib/store";
 import { AGENT_NAMES, ago, baseName, cx, hasAgent, mod, sessionLabel, tildePath } from "../lib/util";
 import { DividerHandle, PaneFrame, PaneIcon } from "../components/Panes";
 import { askConfirm, askText, showMenu, type MenuRow } from "../components/ContextMenu";
@@ -411,7 +411,7 @@ function WorkspaceButton() {
 }
 
 /** The menu for a tab: your own name and colour for it, pinning, its workspace, closing. */
-function tabMenu(group: Group, tab: Tab): MenuRow[] {
+export function tabMenu(group: Group, tab: Tab): MenuRow[] {
   const s = getState();
   const key = metaKey(tab);
   const meta = s.meta[key];
@@ -444,6 +444,7 @@ function tabMenu(group: Group, tab: Tab): MenuRow[] {
     },
     { label: group.pinned ? "Unpin" : "Pin", icon: group.pinned ? <PinOff size={13} /> : <Pin size={13} />, onClick: () => togglePin(group.id) },
     ...(leaves(group.layout).length > 1 ? [{ label: "Separate into tabs", icon: <Columns2 size={13} />, hint: `${leaves(group.layout).length} panes`, onClick: () => separateGroup(group.id) }] : []),
+    { label: "Move to new window", icon: <AppWindow size={13} />, onClick: () => moveGroupToNewWindow(group.id) },
     "sep",
     ...visibleGroups(s)
       .filter((g) => g.id !== group.id)

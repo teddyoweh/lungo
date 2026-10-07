@@ -652,9 +652,18 @@ export function moveToNewWindow(key: string) {
   newWindowWith([t], () => releaseTab(key));
 }
 
-function newWindowWith(tabs: Tab[], then?: () => void) {
+/** Moves a whole tab, its split as it is, into a new window. */
+export function moveGroupToNewWindow(id: string) {
+  const g = state.groups.find((x) => x.id === id);
+  if (!g) return;
+  const keys = leaves(g.layout);
+  const panes = keys.flatMap((k) => state.tabs.find((t) => t.key === k) ?? []);
+  newWindowWith(panes, () => keys.forEach(releaseTab), g.layout, g.focus);
+}
+
+function newWindowWith(tabs: Tab[], then?: () => void, split?: Layout, focus?: string) {
   const panes: SavedPane[] = tabs.map((t) => ({ key: t.key, kind: t.kind, machine: t.machine, session: t.session, title: t.title, cwd: t.cwd ?? t.spawn?.dir, sid: t.sid, flags: t.flags, claude: liveClaude(t), agent: t.agent }));
-  const layout = { panes, groups: [{ id: "g1", layout: { pane: tabs[0].key }, focus: tabs[0].key }], activeGroup: "g1" };
+  const layout = { panes, groups: [{ id: "g1", layout: split ?? { pane: tabs[0].key }, focus: focus ?? tabs[0].key }], activeGroup: "g1" };
   api.newWindowWith(JSON.stringify(layout)).then(
     () => then?.(),
     (e) => toast("error", "Couldn't open a window", errText(e)),
