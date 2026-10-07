@@ -5,7 +5,7 @@ import { BRANDS, type BrandName } from "../lib/brands";
 import type { Credential, Machine, Session } from "../lib/api";
 import { useStore } from "../lib/store";
 import { AGENT_NAMES, agentOf, cx, sessionTone, statusTone } from "../lib/util";
-import { Dot, Sparks } from "./ui";
+import { Dot, WorkingMark } from "./ui";
 
 export function isBrand(name?: string): name is BrandName {
   return !!name && name in BRANDS;
@@ -78,11 +78,11 @@ export function AgentIcon({ agent, size = 14, className }: { agent?: string; siz
 
 /**
  * A session: the Claude logo for Claude sessions, a terminal otherwise, with its state as a
- * badge. While Claude works the icon is the loader itself: green sparks.
+ * badge. While Claude works the icon is the loader itself: green segments.
  */
 export function SessionIcon({ s, size = 13, className }: { s?: Session; size?: number; className?: string }) {
   const tone = sessionTone(s);
-  if (tone === "working") return <Sparks size={size} className={cx("text-ok", className)} />;
+  if (tone === "working") return <WorkingMark size={size} fit className={cx("text-ok", className)} />;
   return (
     <span className={cx("relative inline-flex shrink-0", className)}>
       <AgentIcon agent={agentOf(s)} size={size} />

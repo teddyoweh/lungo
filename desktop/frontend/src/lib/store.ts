@@ -1392,7 +1392,7 @@ export async function initWindow() {
     // to the user's real sessions from a window nobody sees.
     dormant = !!win.headless && isNativeWebview();
     clearForgotten(win.forgotten ?? []);
-    handoff = dormant ? "" : await api.windowHandoff().catch(() => "");
+    opening = dormant ? "" : await api.windowLayout().catch(() => "");
     const tmux = await api.localTmux().catch(() => null);
     const ws = readPref("workspace", false);
     setState({ win, zoom, sidebar: readPref("sidebar") !== "0", winReady: true, welcome: !dormant && windowId === MAIN && readPref(WELCOMED) === null, localTmux: !!tmux?.installed, workspace: ws && state.workspaces.includes(ws) ? ws : null });
@@ -1417,8 +1417,10 @@ function clearForgotten(ids: string[]) {
   api.windowsCleared(gone).catch(() => {});
 }
 
-// The panes this window was opened with by another ("Move to new window"), once.
-let handoff = "";
+// What this window opens with, from the app: panes handed to it by another window, else its
+// own tabs from last time. (Page storage is only the fallback, for tabs from before: windows
+// are separate processes, and only one of them gets its page storage written to disk.)
+let opening = "";
 
 // Layout persistence: every tab and pane comes back when the app reopens. Panes attach to
 // their sessions again by name; a session that is gone (the machine restarted, this computer
@@ -1428,12 +1430,17 @@ type SavedPane = Pick<Tab, "key" | "kind" | "machine" | "session" | "title" | "c
 
 let dormant = false;
 let keptShells = "";
+let keptLayout = "";
 
 export function saveLayout() {
   if (dormant) return;
   const panes: SavedPane[] = state.tabs.map((t) => ({ key: t.key, kind: t.kind, machine: t.machine, session: t.session, title: t.title, cwd: t.cwd ?? t.spawn?.dir, sid: t.sid, flags: t.flags, claude: liveClaude(t), agent: t.agent, seen: aliveAt.get(t.key), at: t.key === state.activeTab ? Date.now() : lastActive.get(t.key) }));
   const groups = state.groups.map((g) => ({ ...g, zoom: false }));
-  writePref(LAYOUT, JSON.stringify({ panes, groups, activeGroup: state.activeGroup }));
+  const layout = JSON.stringify({ panes, groups, activeGroup: state.activeGroup });
+  if (layout !== keptLayout) {
+    keptLayout = layout;
+    api.saveWindowLayout(layout).catch(() => {});
+  }
   // The sessions these panes show: another window asked to show one sends the user here,
   // and the shells among them are not for tidying up, attached right now or not.
   const keys = [...new Set(state.tabs.flatMap((t) => (tabMachine(t) && t.session ? [`${tabMachine(t)}/${t.session}`] : [])))].sort();
@@ -1446,8 +1453,8 @@ export function saveLayout() {
 
 export function restoreLayout(machineNames: string[]) {
   try {
-    const raw = handoff || readPref(LAYOUT, false);
-    handoff = "";
+    const raw = opening || readPref(LAYOUT, false);
+    opening = "";
     if (!raw || state.tabs.length || dormant) return;
     const saved = JSON.parse(raw) as { panes: SavedPane[]; groups: Group[]; activeGroup?: string };
     const known = new Set(machineNames);

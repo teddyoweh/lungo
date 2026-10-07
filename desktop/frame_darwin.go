@@ -18,5 +18,6 @@ func skyFrameChanged() {
 func skyWindowClosing() {
 	if mainApp != nil {
 		mainApp.win.closing.Store(true)
+		noteErr("window %s: close button", mainApp.win.id)
 	}
 }

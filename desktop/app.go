@@ -1067,8 +1067,17 @@ func (a *App) NewWindow() error { return a.win.open("") }
 // NewWindowWith opens another window with panes taken from this one (a saved layout).
 func (a *App) NewWindowWith(layout string) error { return a.win.openWith(layout) }
 
-// WindowHandoff is the layout this window was opened with, once ("" when none).
-func (a *App) WindowHandoff() string { return a.win.takeHandoff() }
+// WindowLayout is what this window opens with: panes handed to it, else its own tabs from
+// last time ("" when none).
+func (a *App) WindowLayout() string { return a.win.layout() }
+
+// SaveWindowLayout keeps this window's tabs and splits for next time.
+func (a *App) SaveWindowLayout(layout string) error {
+	if !restores() && os.Getenv("SKY_HEADLESS") != "" {
+		return nil // a hidden dev window keeps nothing
+	}
+	return a.win.saveLayout(layout)
+}
 
 // WindowSessions tells the app which sessions this window's panes show ("machine/session"):
 // another window asked to show one of them sends the user here, and shells any window

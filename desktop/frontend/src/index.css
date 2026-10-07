@@ -209,8 +209,8 @@ select:focus-visible {
   animation: sky-pulse 1.6s ease-out infinite;
 }
 
-/* The working mark (Sparks): one glyph at a time, centred in a square so the line never shifts. */
-.sparks {
+/* The working mark (WorkingMark): one frame at a time; every frame is the same width. */
+.working-mark {
   display: inline-grid;
   place-items: center;
   flex-shrink: 0;

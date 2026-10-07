@@ -318,12 +318,16 @@ func (w *window) leaving() (appQuit bool) {
 	others := w.others()
 	switch {
 	case closing && len(others) > 0:
+		noteErr("window %s closed: forgotten (%d other windows open)", w.id, len(others))
 		w.forget()
 	case !closing && !w.quitByPeer.Load():
+		noteErr("window %s: quitting the app, %d other windows along", w.id, len(others))
 		for pid := range others {
 			askToQuit(pid)
 		}
 		return true
+	default:
+		noteErr("window %s: quitting (closing=%v, asked by another=%v)", w.id, closing, w.quitByPeer.Load())
 	}
 	return closing // the last window closed: the app quits with it
 }
@@ -338,6 +342,7 @@ func (w *window) forget() {
 		}
 	})
 	os.Remove(stateFile(w.id))
+	os.Remove(layoutFile(w.id))
 	if w.id != mainWindow {
 		updateFrames(func(m map[string]frame) { delete(m, w.id) })
 	}
@@ -502,5 +507,31 @@ func (w *window) takeHandoff() string {
 		return ""
 	}
 	os.Remove(handoffFile(w.id))
+	return string(b)
+}
+
+// ---------- each window's tabs ----------
+
+// A window's tabs and splits are kept here (<id>.layout.json), not in the page's storage:
+// windows are separate processes, and only one of them got its page storage written to disk,
+// so every other window came back empty after a restart.
+func layoutFile(id string) string { return filepath.Join(windowsDir(), id+".layout.json") }
+
+func (w *window) saveLayout(layout string) error {
+	_ = os.MkdirAll(windowsDir(), 0o700)
+	tmp := layoutFile(w.id) + ".tmp"
+	if err := os.WriteFile(tmp, []byte(layout), 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, layoutFile(w.id))
+}
+
+// layout is what the window opens with: panes handed over by another window, else its own
+// tabs from last time ("" when there are none: a new window, or one from before this file).
+func (w *window) layout() string {
+	if h := w.takeHandoff(); h != "" {
+		return h
+	}
+	b, _ := os.ReadFile(layoutFile(w.id))
 	return string(b)
 }

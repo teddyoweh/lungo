@@ -263,40 +263,41 @@ const tones = {
   violet: "bg-violet",
 };
 
-// Claude Code's own working glyphs, out and back. ✳ asks for its text form, or macOS draws an emoji.
-const SPARK_FRAMES = ["·", "✢", "✳\uFE0E", "✶", "✻", "✽", "✻", "✶", "✳\uFE0E", "✢"];
+// A light stepping along three cells and back.
+const MARK_FRAMES = ["▰▱▱", "▱▰▱", "▱▱▰", "▱▰▱"];
 
-// One clock for every mark on screen, so they all turn together; it runs only while one is shown.
-// With reduced motion the mark holds still on ✻.
+// One clock for every mark on screen, so they all step together; it runs only while one is shown.
+// With reduced motion the mark holds still.
 const STILL = matchMedia("(prefers-reduced-motion: reduce)").matches;
-let sparkFrame = 0;
-const sparkSubs = new Set<() => void>();
-let sparkTimer: number | undefined;
-function subscribeSpark(fn: () => void) {
-  sparkSubs.add(fn);
-  if (sparkTimer === undefined && !STILL) {
-    sparkTimer = window.setInterval(() => {
-      sparkFrame = (sparkFrame + 1) % SPARK_FRAMES.length;
-      sparkSubs.forEach((f) => f());
-    }, 120);
+let markFrame = 0;
+const markSubs = new Set<() => void>();
+let markTimer: number | undefined;
+function subscribeMark(fn: () => void) {
+  markSubs.add(fn);
+  if (markTimer === undefined && !STILL) {
+    markTimer = window.setInterval(() => {
+      markFrame = (markFrame + 1) % MARK_FRAMES.length;
+      markSubs.forEach((f) => f());
+    }, 160);
   }
   return () => {
-    sparkSubs.delete(fn);
-    if (sparkSubs.size) return;
-    window.clearInterval(sparkTimer);
-    sparkTimer = undefined;
+    markSubs.delete(fn);
+    if (markSubs.size) return;
+    window.clearInterval(markTimer);
+    markTimer = undefined;
   };
 }
 
 /**
- * The "working" mark: Claude's asterisk, cycling ·✢✳✶✻✽ the way Claude Code does in its own
- * terminal. It takes the text colour (green where a session is working).
+ * The "working" mark: ▰▱▱ segments. It takes the text colour (green where a session is working).
+ * Beside a word it runs three cells wide; `fit` squeezes it into a square icon slot instead.
  */
-export function Sparks({ size = 12, className }: { size?: number; className?: string }) {
-  const frame = useSyncExternalStore(subscribeSpark, () => sparkFrame);
+export function WorkingMark({ size = 12, fit, className }: { size?: number; fit?: boolean; className?: string }) {
+  const frame = useSyncExternalStore(subscribeMark, () => markFrame);
+  const box = fit ? { width: size, height: size, fontSize: size * 0.64, letterSpacing: -size * 0.07 } : { height: size, fontSize: size };
   return (
-    <span role="img" aria-label="Working" style={{ width: size, height: size, fontSize: size }} className={cx("sparks", className)}>
-      {STILL ? "✻" : SPARK_FRAMES[frame]}
+    <span role="img" aria-label="Working" style={box} className={cx("working-mark", className)}>
+      {STILL ? "▱▰▱" : MARK_FRAMES[frame]}
     </span>
   );
 }

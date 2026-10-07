@@ -9,7 +9,7 @@ import { terminals } from "../lib/terminals";
 import { drawTerminal } from "../lib/thumb";
 import { agoText, cx, mod, sessionTime } from "../lib/util";
 import { PaneIcon } from "./Panes";
-import { Sparks } from "./ui";
+import { WorkingMark } from "./ui";
 
 const RATIO = 16 / 10;
 
@@ -138,7 +138,7 @@ export function Switcher() {
                       waiting ? "bg-[color-mix(in_srgb,var(--amber)_22%,rgba(0,0,0,0.55))] text-warn" : "bg-black/50 text-ok",
                     )}
                   >
-                    {waiting ? <span className="size-[6px] rounded-full bg-warn" /> : <Sparks size={13} />}
+                    {waiting ? <span className="size-[6px] rounded-full bg-warn" /> : <WorkingMark size={13} />}
                     {waiting ? "needs you" : "working"}
                   </span>
                 )}

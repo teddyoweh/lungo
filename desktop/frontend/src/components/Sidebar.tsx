@@ -67,7 +67,7 @@ import { leaves, type Layout } from "../lib/panes";
 import { tabMenu } from "../views/Sessions";
 import { appIconSrc } from "../lib/appicons";
 import { agentOf, ago, cx, hasAgent, mod, sessionTime, sessionTone, tildePath } from "../lib/util";
-import { IconButton, SidebarToggle, Sparks, Spinner, useNow } from "./ui";
+import { IconButton, SidebarToggle, WorkingMark, Spinner, useNow } from "./ui";
 import { AgentIcon, LocalIcon, ProviderIcon } from "./Brand";
 import { askConfirm, askText, showMenu, type MenuRow } from "./ContextMenu";
 import { agentRows } from "./AgentMenu";
@@ -434,7 +434,7 @@ function Section({ id, label, sessions, machines, activeKey, now }: { id: Bucket
     <div className="mt-3 first:mt-1">
       <div className="group flex h-[24px] items-center pr-0.5 pl-2">
         <button onClick={() => setOpen(!open)} className="no-drag flex min-w-0 flex-1 items-center gap-1.5 text-[11.5px] font-medium text-muted hover:text-fg">
-          {id === "working" && <Sparks size={13} className="text-ok" />}
+          {id === "working" && <WorkingMark size={13} className="text-ok" />}
           <span className={cx(id === "waiting" && "text-warn")}>{label}</span>
           <span className="text-[10.5px] font-normal text-subtle tabular-nums">{sessions.length}</span>
           <ChevronRight size={10} className={cx("shrink-0 text-subtle opacity-0 transition group-hover:opacity-100", open && "rotate-90")} />
@@ -868,6 +868,9 @@ function TabGroup({ group: g, title, rows, activeKey, now, grouped, front }: { g
   const folder = folders.size === 1 ? [...folders][0] : "";
   const branch = branches.size === 1 ? [...branches][0] : "";
   const shared = folders.size === 1 && branches.size === 1;
+  // The heading is the folder the tab works in (the focused pane's, when they differ).
+  const focusSession = sessionFor(tabs.find((t) => t.key === g.focus), sessions) ?? rows[0];
+  const name = folder || folderName(tildePath(focusSession.path, focusSession.machine === LOCAL ? home : undefined)) || title;
   const tone = (key: string): "waiting" | "working" | "" => {
     const x = sessionFor(tabs.find((t) => t.key === key), sessions);
     return x && hasAgent(x) && (x.state === "waiting" || x.state === "working") ? x.state : "";
@@ -909,8 +912,7 @@ function TabGroup({ group: g, title, rows, activeKey, now, grouped, front }: { g
           <LayoutMap layout={g.layout} focus={g.focus} tone={tone} front={front} />
         </span>
         <span className="flex min-w-0 flex-1 items-center gap-1.5 text-[11.5px]">
-          <span className={cx("min-w-0 truncate font-medium", front ? "text-fg" : "text-muted group-hover/tab:text-fg")}>{title}</span>
-          {shared && folder && folder !== title && !folder.endsWith(`/${title}`) && <span className="min-w-0 shrink truncate text-[11px] text-subtle">{folder}</span>}
+          <span className={cx("min-w-0 truncate font-medium", front ? "text-fg" : "text-muted group-hover/tab:text-fg")}>{name}</span>
           {shared && !mainBranch(branch) && (
             <span className="flex min-w-0 shrink items-center gap-[2px] text-[11px] text-subtle">
               <GitBranch size={9.5} className="shrink-0 opacity-80" />
@@ -936,7 +938,7 @@ function TabGroup({ group: g, title, rows, activeKey, now, grouped, front }: { g
               {needs}
             </span>
           ) : folded && working ? (
-            <Sparks size={12} className="text-ok" />
+            <WorkingMark size={12} className="text-ok" />
           ) : (
             panes.length
           )}
@@ -951,11 +953,18 @@ function TabGroup({ group: g, title, rows, activeKey, now, grouped, front }: { g
         </span>
       </div>
       {!folded && (
-        <div className="relative ml-[15px] pl-[5px]">
-          <span className={cx("absolute top-[3px] bottom-[3px] left-0 w-px rounded-full", front ? "bg-[color-mix(in_srgb,var(--fg)_35%,transparent)]" : "bg-[color-mix(in_srgb,var(--fg)_14%,transparent)]")} />
-          {rows.map((s) => (
-            <SessionRow key={keyOf(s)} s={s} activeKey={activeKey} now={now} grouped={grouped} where={!shared} />
-          ))}
+        // A line down from the heading that curves into each session (╰), and stops at the last.
+        <div className="ml-[15px]">
+          {rows.map((s, i) => {
+            const line = front ? "border-[color-mix(in_srgb,var(--fg)_38%,transparent)]" : "border-[color-mix(in_srgb,var(--fg)_17%,transparent)]";
+            return (
+              <div key={keyOf(s)} className="relative pl-[10px]">
+                <span className={cx("pointer-events-none absolute top-0 left-0 z-[1] h-[13px] w-[15px] rounded-bl-[8px] border-b border-l", line)} />
+                {i < rows.length - 1 && <span className={cx("pointer-events-none absolute top-[6px] bottom-0 left-0 border-l", line)} />}
+                <SessionRow s={s} activeKey={activeKey} now={now} grouped={grouped} where={!shared} />
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
@@ -1057,7 +1066,7 @@ function SessionRow({ s, activeKey, now, grouped, where = true }: { s: Session; 
           {state && (
             <>
               <span className={cx("flex shrink-0 items-center gap-[5px]", b === "waiting" ? "text-warn" : b === "working" ? "text-ok" : undefined)}>
-                {b === "working" ? <Sparks size={13} /> : b === "waiting" ? <span className="size-[5px] rounded-full bg-warn" /> : null}
+                {b === "working" ? <WorkingMark size={13} /> : b === "waiting" ? <span className="size-[5px] rounded-full bg-warn" /> : null}
                 {state}
               </span>
               {(folder || branchShown) && dot}

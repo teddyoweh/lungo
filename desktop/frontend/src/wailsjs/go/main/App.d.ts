@@ -207,6 +207,8 @@ export function SaveSettings(arg1:main.SettingsView):Promise<void>;
 
 export function SaveWindowFrame():Promise<void>;
 
+export function SaveWindowLayout(arg1:string):Promise<void>;
+
 export function SearchShow(arg1:string,arg2:string,arg3:string):Promise<void>;
 
 export function SearchStart(arg1:number,arg2:string):Promise<void>;
@@ -277,9 +279,9 @@ export function UseClaudeAccount(arg1:string):Promise<string>;
 
 export function WatchedLinks():Promise<Array<string>>;
 
-export function WindowHandoff():Promise<string>;
-
 export function WindowInfo():Promise<main.WindowInfo>;
+
+export function WindowLayout():Promise<string>;
 
 export function WindowSessions(arg1:Array<string>):Promise<void>;
 

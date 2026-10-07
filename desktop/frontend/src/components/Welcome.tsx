@@ -11,7 +11,7 @@ import { AGENT_NAMES, cx } from "../lib/util";
 import { APP_ICONS, appIconSrc } from "../lib/appicons";
 import { THEMES } from "../lib/themes";
 import { AgentIcon, BrandIcon, LocalIcon, ProviderIcon, isBrand } from "./Brand";
-import { Sparks } from "./ui";
+import { WorkingMark } from "./ui";
 import { ThemeTile } from "../views/Settings";
 import { AGENTS } from "./AgentMenu";
 
@@ -536,7 +536,7 @@ function SceneSessions() {
   );
   const working = (
     <span className="flex items-center gap-1.5 text-ok">
-      <Sparks size={12} /> working
+      <WorkingMark size={12} /> working
     </span>
   );
   return (

@@ -402,6 +402,10 @@ export function SaveWindowFrame() {
   return window['go']['main']['App']['SaveWindowFrame']();
 }
 
+export function SaveWindowLayout(arg1) {
+  return window['go']['main']['App']['SaveWindowLayout'](arg1);
+}
+
 export function SearchShow(arg1, arg2, arg3) {
   return window['go']['main']['App']['SearchShow'](arg1, arg2, arg3);
 }
@@ -542,12 +546,12 @@ export function WatchedLinks() {
   return window['go']['main']['App']['WatchedLinks']();
 }
 
-export function WindowHandoff() {
-  return window['go']['main']['App']['WindowHandoff']();
-}
-
 export function WindowInfo() {
   return window['go']['main']['App']['WindowInfo']();
+}
+
+export function WindowLayout() {
+  return window['go']['main']['App']['WindowLayout']();
 }
 
 export function WindowSessions(arg1) {
