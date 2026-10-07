@@ -1,5 +1,6 @@
 // One small global store (useSyncExternalStore) for everything the views share.
 import { useSyncExternalStore } from "react";
+import { takePrefs } from "./prefs";
 import { geometry, leaves, neighbor, remove, resize as resizeLayout, split as splitLayout, type Dir, type Layout } from "./panes";
 import {
   api,
@@ -1763,6 +1764,25 @@ export function wireEvents() {
     });
   });
   on<SessionsView>("sessions", applySessions);
+  // Settings another window changed (see lib/prefs): into this page's storage, and the ones
+  // on screen take effect at once.
+  on<Record<string, string>>("prefs", (prefs) => {
+    const changed = takePrefs(prefs ?? {});
+    if (changed.has("sky.meta")) setState({ meta: loadJSON<Record<string, Meta>>("sky.meta", {}) });
+    if (changed.has("sky.workspaces")) {
+      const workspaces = loadJSON<string[]>("sky.workspaces", []);
+      setState((s) => ({
+        workspaces,
+        workspace: s.workspace !== null && !workspaces.includes(s.workspace) ? null : s.workspace,
+        groups: s.groups.map((g) => (g.ws && !workspaces.includes(g.ws) ? { ...g, ws: undefined } : g)),
+      }));
+    }
+    if (changed.has("sky.theme") || changed.has("sky.skin.dark") || changed.has("sky.skin.light")) {
+      setState({ theme: loadTheme(), skins: loadSkins() });
+      applyTheme(state.theme);
+    }
+    if (changed.has("sky.term")) setState({ term: loadTermPrefs() });
+  });
   on<UpdateInfo>("update", (update) => setState({ update }));
   api.updateInfo().then((update) => setState({ update }), () => {});
   // Another window sent the user here for a session this one shows, or took it.

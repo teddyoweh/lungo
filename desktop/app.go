@@ -99,6 +99,7 @@ func (a *App) domReady(ctx context.Context) {
 	go a.iconLoop(ctx)
 	go a.win.reopen()
 	go a.updateLoop(ctx)
+	go a.watchPrefs(ctx)
 	go a.win.watchAsks(func(verb, machine, session string) {
 		wruntime.EventsEmit(ctx, "window-ask", map[string]string{"verb": verb, "machine": machine, "session": session})
 	})
