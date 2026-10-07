@@ -66,6 +66,32 @@ function runEager() {
   eagerTimer = eagerQueue.length ? window.setTimeout(runEager, 60) : undefined;
 }
 
+// The GPU renderer is kept for the panes shown most recently, so going back to one draws it at
+// once instead of building a renderer again (and drawing without one meanwhile). Browsers allow
+// about sixteen WebGL contexts in all; eight are kept.
+const GPU_KEEP = 8;
+const gpuRecent: string[] = []; // pane keys, the most recently shown first
+const gpuDrop = new Map<string, () => void>(); // pane key → let its renderer go
+function gpuUsed(key: string, drop: () => void) {
+  gpuDrop.set(key, drop);
+  const i = gpuRecent.indexOf(key);
+  if (i >= 0) gpuRecent.splice(i, 1);
+  gpuRecent.unshift(key);
+  for (const old of gpuRecent.splice(GPU_KEEP)) gpuDrop.get(old)?.();
+}
+function gpuGone(key: string) {
+  gpuDrop.delete(key);
+  const i = gpuRecent.indexOf(key);
+  if (i >= 0) gpuRecent.splice(i, 1);
+}
+
+/** Runs fn when the page has nothing else to do (soon in any case). */
+function whenIdle(fn: () => void) {
+  const ric = (window as unknown as { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => number }).requestIdleCallback;
+  if (ric) ric(fn, { timeout: 2000 });
+  else window.setTimeout(fn, 50);
+}
+
 // The last screen of every session pane is kept, so when the app opens again each pane shows
 // what it showed at once, and the live screen replaces it a moment later as tmux attaches.
 const SNAP = "sky.snap.";
@@ -238,6 +264,9 @@ export const TerminalView = memo(function TerminalView({ tab, active, focused }:
   const fit = useRef<FitAddon | null>(null);
   const serializer = useRef<SerializeAddon | null>(null);
   const gl = useRef<WebglAddon | null>(null);
+  const lost = useRef(0); // GPU renderers this pane lost, to give up after a few
+  const dirty = useRef(false); // the screen changed since it was last kept
+  const showView = useRef<() => void>(() => {}); // lays the terminal out in its pane, once
   const ws = useRef<WebSocket | null>(null);
   const opening = useRef(false);
   const everConnected = useRef(false);
@@ -274,7 +303,9 @@ export const TerminalView = memo(function TerminalView({ tab, active, focused }:
       cursorStyle: getState().term.cursor,
       cursorInactiveStyle: "outline",
       allowProposedApi: true,
-      scrollback: 20000,
+      // A session pane draws tmux's screen, and tmux keeps the history; a plain shell keeps
+      // its own.
+      scrollback: persistent(tab) ? 2000 : 20000,
       // The room kept on the right for xterm's scrollbar. A session in tmux scrolls inside
       // tmux and never shows one, so it gets the full width.
       overviewRuler: { width: persistent(tab) ? 1 : 8 },
@@ -288,7 +319,7 @@ export const TerminalView = memo(function TerminalView({ tab, active, focused }:
     });
     const f = new FitAddon();
     t.loadAddon(f);
-    t.loadAddon(new WebLinksAddon((_e, uri) => api.openURL(uri)));
+    t.loadAddon(new WebLinksAddon((_e, uri) => void api.openURL(uri).catch(() => {})));
     const u = new Unicode11Addon();
     t.loadAddon(u);
     t.unicode.activeVersion = "11";
@@ -348,7 +379,7 @@ export const TerminalView = memo(function TerminalView({ tab, active, focused }:
       if (!b64 || b64 === "?" || b64.length > 4_000_000) return true;
       try {
         const text = new TextDecoder().decode(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)));
-        if (text && (text !== lastCopy.text || Date.now() - lastCopy.at > 1000)) api.copy(text);
+        if (text && (text !== lastCopy.text || Date.now() - lastCopy.at > 1000)) api.copy(text).catch(() => {});
         lastCopy = { text, at: Date.now() };
       } catch {
         /* not base64 */
@@ -406,7 +437,7 @@ export const TerminalView = memo(function TerminalView({ tab, active, focused }:
       window.clearTimeout(copyTimer);
       copyTimer = window.setTimeout(() => {
         const s = t.getSelection();
-        if (s) api.copy(s);
+        if (s) api.copy(s).catch(() => {});
       }, 250);
     });
     // ⌘C with nothing selected in xterm leaves the clipboard alone (what Claude copied stays).
@@ -438,18 +469,27 @@ export const TerminalView = memo(function TerminalView({ tab, active, focused }:
       };
     };
     let disposed = false;
-    fontsReady.then(() => {
-      if (disposed || !host.current) return;
+    let laidOut = false;
+    // The terminal laid out in its pane, with what this session showed last time until the
+    // live screen arrives (unless that has come already).
+    const show = () => {
+      if (laidOut || disposed || !host.current) return;
+      laidOut = true;
       t.open(host.current);
       takeMouse();
-      // What this session showed last time, until the live screen arrives.
-      const snap = !tabRef.current.url && readSnap(tabRef.current);
+      const snap = !tabRef.current.url && !dirty.current && readSnap(tabRef.current);
       if (snap) {
         t.write(snap.data);
         setSeen(true);
       }
+    };
+    showView.current = show;
+    fontsReady.then(() => {
+      if (disposed || !host.current) return;
       if (!activeRef.current) {
-        // A pane in a background tab: connect in its turn, at the size it will have.
+        // A pane in a background tab: laid out in its turn, so the tab on screen comes first,
+        // then connected in its turn, at the size it will have.
+        eagerly(show);
         eagerly(() => {
           if (disposed || activeRef.current || tabRef.current.termId || tabRef.current.error || opening.current) return;
           const size = hiddenSize();
@@ -462,6 +502,7 @@ export const TerminalView = memo(function TerminalView({ tab, active, focused }:
         });
         return;
       }
+      show();
       setGPU(true);
       safeFit();
       openBackend();
@@ -470,9 +511,9 @@ export const TerminalView = memo(function TerminalView({ tab, active, focused }:
     // A new theme: new colours, and the GPU renderer's glyph cache was drawn in the old ones.
     const obs = new MutationObserver(() => {
       t.options.theme = currentTheme();
-      if (activeRef.current && t.element) {
+      if (t.element && (activeRef.current || gl.current)) {
         t.clearTextureAtlas();
-        t.refresh(0, t.rows - 1);
+        if (activeRef.current) t.refresh(0, t.rows - 1);
       }
     });
     obs.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme", "data-skin"] });
@@ -515,6 +556,8 @@ export const TerminalView = memo(function TerminalView({ tab, active, focused }:
 
     return () => {
       disposed = true;
+      window.clearTimeout(copyTimer);
+      gpuGone(tab.key);
       window.clearTimeout(fitTimer.current);
       window.clearTimeout(sizeTimer.current);
       ro.disconnect();
@@ -549,7 +592,7 @@ export const TerminalView = memo(function TerminalView({ tab, active, focused }:
     e.preventDefault();
     const sel = t.getSelection();
     const rows: MenuRow[] = [
-      { label: "Copy", hint: "⌘C", disabled: !sel, onClick: () => void api.copy(sel) },
+      { label: "Copy", hint: "⌘C", disabled: !sel, onClick: () => void api.copy(sel).catch(() => {}) },
       {
         label: "Paste",
         hint: "⌘V",
@@ -565,25 +608,33 @@ export const TerminalView = memo(function TerminalView({ tab, active, focused }:
     showMenu(e, rows);
   }
 
-  // The GPU renderer only for panes on screen: browsers allow a limited number of WebGL
-  // contexts, and a hidden pane doesn't need one (xterm stops drawing while it's hidden).
+  // The GPU renderer for panes on screen, and kept a while for ones just hidden (see
+  // GPU_KEEP): browsers allow a limited number of WebGL contexts.
+  function releaseGPU() {
+    gl.current?.dispose();
+    gl.current = null;
+    gpuGone(tabRef.current.key);
+  }
   function setGPU(on: boolean) {
     const t = term.current;
     if (!t?.element) return;
-    if (!on) {
-      gl.current?.dispose();
-      gl.current = null;
-      return;
-    }
-    if (gl.current) return;
+    if (!on) return releaseGPU();
+    if (gl.current) return gpuUsed(tabRef.current.key, releaseGPU);
     try {
       const a = new WebglAddon();
       a.onContextLoss(() => {
         a.dispose();
-        if (gl.current === a) gl.current = null;
+        if (gl.current === a) {
+          gl.current = null;
+          gpuGone(tabRef.current.key);
+        }
+        // The GPU took it back (too many contexts, its process restarted): a pane on screen
+        // gets a new one, a few times at most.
+        if (activeRef.current && lost.current++ < 3) window.setTimeout(() => activeRef.current && setGPU(true), 300);
       });
       t.loadAddon(a);
       gl.current = a;
+      gpuUsed(tabRef.current.key, releaseGPU);
     } catch {
       /* DOM renderer */
     }
@@ -679,7 +730,10 @@ export const TerminalView = memo(function TerminalView({ tab, active, focused }:
   // Open the backend when the pane is first shown, and again whenever it let go of its
   // terminal to attach afresh (the connection dropped, the computer woke up).
   useEffect(() => {
-    if (tab.termId || tab.error || !term.current?.element) return;
+    if (active) showView.current();
+    // A pane on screen connects once it is laid out (at its size); one in the background may
+    // connect again before that.
+    if (tab.termId || tab.error || !term.current || (active && !term.current.element)) return;
     if (!active && !tab.retry && !everConnected.current) return; // a background pane's first connection waits its turn
     const timer = window.setTimeout(
       () => {
@@ -745,8 +799,25 @@ export const TerminalView = memo(function TerminalView({ tab, active, focused }:
       ws.current = s;
       const replay = !fresh;
       fresh = false;
-      let first = true;
       everConnected.current = true;
+      // A connection made again gets the terminal's output replayed: it is drawn once it has
+      // all come (it comes in pieces), so the screen doesn't go blank in between.
+      let replaying = replay;
+      let replayed: Uint8Array[] = [];
+      let replayTimer: number | undefined;
+      let replayCap: number | undefined;
+      const drawReplay = () => {
+        window.clearTimeout(replayTimer);
+        window.clearTimeout(replayCap);
+        if (!replaying) return;
+        replaying = false;
+        const t = term.current;
+        if (!t) return;
+        t.reset();
+        if (replayed.length) t.write(joinBytes(replayed));
+        replayed = [];
+        dirty.current = true;
+      };
       s.onopen = () => {
         attempts = 0;
         // The session may have been left in its scrollback; the first key typed makes sure.
@@ -773,9 +844,15 @@ export const TerminalView = memo(function TerminalView({ tab, active, focused }:
         }
         let data = new Uint8Array(ev.data);
         tail = (tail + dec.decode(data, { stream: true })).slice(-800);
+        if (replaying) {
+          replayed.push(data);
+          window.clearTimeout(replayTimer);
+          replayTimer = window.setTimeout(drawReplay, 60);
+          replayCap ??= window.setTimeout(drawReplay, 400);
+          return;
+        }
+        dirty.current = true;
         if (replay) {
-          if (first) t.reset();
-          first = false;
           t.write(data);
           return;
         }
@@ -805,8 +882,15 @@ export const TerminalView = memo(function TerminalView({ tab, active, focused }:
         t.write(data);
       };
       s.onclose = () => {
+        drawReplay();
         if (stop || ws.current !== s) return;
-        if (++attempts > 20) return;
+        if (++attempts > 20) {
+          // It keeps dropping: the pane says so rather than look connected while frozen.
+          const cur = tabRef.current;
+          if (persistent(cur)) dropTab(cur.key, "The connection kept dropping");
+          else updateTab(cur.key, { exited: true });
+          return;
+        }
         retry = window.setTimeout(connect, Math.min(4000, 250 * attempts));
       };
     };
@@ -827,11 +911,11 @@ export const TerminalView = memo(function TerminalView({ tab, active, focused }:
     return () => window.clearTimeout(timer);
   }, [tab.url, tab.error]);
 
-  // Keep this session's screen for next time: every few seconds while it is connected, and
-  // when the window goes away.
+  // Keep this session's screen for next time: when it changed, every few seconds while it is
+  // connected (when the page has a moment), and at once when the window goes away.
   useEffect(() => {
     if (!tab.url || !persistent(tab)) return;
-    const keep = () => {
+    const save = () => {
       const t = term.current;
       const ser = serializer.current;
       if (!t || !ser || !seenRef.current) return;
@@ -841,22 +925,65 @@ export const TerminalView = memo(function TerminalView({ tab, active, focused }:
         /* a screen that can't be kept is not worth an error */
       }
     };
-    const timer = window.setInterval(keep, 8000);
-    window.addEventListener("pagehide", keep);
-    window.addEventListener("beforeunload", keep);
+    const keep = (now: boolean) => {
+      if (!dirty.current) return;
+      dirty.current = false;
+      if (now) save();
+      else whenIdle(save);
+    };
+    const soon = () => keep(false);
+    const now = () => keep(true);
+    const timer = window.setInterval(soon, 8000);
+    window.addEventListener("pagehide", now);
+    window.addEventListener("beforeunload", now);
     return () => {
-      keep();
+      now();
       window.clearInterval(timer);
-      window.removeEventListener("pagehide", keep);
-      window.removeEventListener("beforeunload", keep);
+      window.removeEventListener("pagehide", now);
+      window.removeEventListener("beforeunload", now);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab.url]);
 
-  // Shown: draw with the GPU and refit; hidden: release it. Focused: take the keyboard.
+  // A pane in a background tab keeps the size it will have when shown, so showing it doesn't
+  // resize the program in it (Claude drawing again over the network, a flash). After the
+  // window, the tab's layout, the zoom or the sidebar change, that size is worked out again.
+  const layoutHere = useStore((s) => groupOf(tab.key, s)?.layout);
+  const sidebarShown = useStore((s) => s.sidebar);
   useEffect(() => {
-    setGPU(active);
+    if (active) return;
+    const fitHidden = () => {
+      const t = term.current;
+      if (!t || activeRef.current) return;
+      const size = hiddenSize();
+      if (!size || (size.cols === t.cols && size.rows === t.rows)) return;
+      try {
+        t.resize(size.cols, size.rows);
+      } catch {
+        return;
+      }
+      announceSize();
+    };
+    let timer = window.setTimeout(fitHidden, 250);
+    const later = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(fitHidden, 250);
+    };
+    window.addEventListener("resize", later);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("resize", later);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, layoutHere, zoom, sidebarShown]);
+
+  // Shown: draw with the GPU (a kept renderer is used again) and refit. Hidden: the renderer
+  // stays while the pane is among the most recently shown. Focused: take the keyboard.
+  useEffect(() => {
     if (!active) return;
+    showView.current();
+    lost.current = 0;
+    setGPU(true);
     const id = requestAnimationFrame(() => {
       safeFit();
       if (focused) term.current?.focus();

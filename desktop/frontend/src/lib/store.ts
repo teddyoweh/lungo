@@ -158,6 +158,7 @@ export interface State {
   view: View;
   machines: MachineView[];
   machinesLoaded: boolean;
+  machinesKnown: boolean; // the machine list really came in (a failed read doesn't count)
   sessions: SessionsView;
   sessionsLoaded: boolean;
   tabs: Tab[]; // every pane, across groups
@@ -294,6 +295,7 @@ let state: State = {
   view: "sessions",
   machines: [],
   machinesLoaded: false,
+  machinesKnown: false,
   // The sessions seen last time, until the first look at the machines (a second or two):
   // the sidebar is full the moment the app opens.
   sessions: loadJSON<SessionsView>("sky.sessions.last", { sessions: [], errors: {}, at: "" }),
@@ -447,20 +449,31 @@ export function opsRunning(s: State): number {
 
 // ---------- data ----------
 
+let machinesRetry = 0;
+/**
+ * Reads the machines. A read that fails is tried again, a little later each time, until it
+ * works: tabs on machines come back only once the machines are really known, so a failed
+ * read never drops them.
+ */
 export async function loadMachines() {
   try {
     const machines = await api.machines();
-    setState({ machines, machinesLoaded: true });
+    machinesRetry = 0;
+    setState({ machines, machinesLoaded: true, machinesKnown: true });
   } catch (e) {
-    toast("error", "Couldn't read machines", errText(e));
+    if (machinesRetry === 0) toast("error", "Couldn't read machines", errText(e));
     setState({ machinesLoaded: true });
+    const wait = Math.min(30000, 2000 * 2 ** machinesRetry++);
+    window.setTimeout(() => {
+      if (!state.machinesKnown) void loadMachines();
+    }, wait);
   }
 }
 
 export async function refreshMachines() {
   try {
     const machines = await api.refreshMachines();
-    setState({ machines, machinesLoaded: true });
+    setState({ machines, machinesLoaded: true, machinesKnown: true });
   } catch (e) {
     toast("error", "Refresh failed", errText(e));
   }
@@ -477,7 +490,8 @@ export async function loadSessions() {
 const sessionKey = (s: Session) => `${s.machine}/${s.name}`;
 const sameSession = (a: Session, b: Session) =>
   a.activity === b.activity && a.state === b.state && a.message === b.message && a.path === b.path && a.command === b.command &&
-  a.attached === b.attached && a.claude === b.claude && a.stateAt === b.stateAt && a.windows === b.windows && a.title === b.title && a.sid === b.sid && a.flags === b.flags && a.branch === b.branch && a.oldLogin === b.oldLogin;
+  a.attached === b.attached && a.claude === b.claude && a.stateAt === b.stateAt && a.windows === b.windows && a.title === b.title && a.sid === b.sid && a.flags === b.flags && a.branch === b.branch && a.oldLogin === b.oldLogin &&
+  a.mouse === b.mouse && a.alt === b.alt && a.scrollKey === b.scrollKey && a.agent === b.agent && a.stale === b.stale;
 
 /**
  * Takes a sessions poll. Sessions that didn't change keep their object (and the whole list
@@ -1109,7 +1123,7 @@ export function closeTab(key: string) {
 /** Takes a pane away, leaving its session as it is (closing it, or moving it to another window). */
 function releaseTab(key: string) {
   const t = state.tabs.find((x) => x.key === key);
-  if (t?.termId) api.closeTerminal(t.termId);
+  if (t?.termId) api.closeTerminal(t.termId).catch(() => {});
   setState((s) => {
     const tabs = s.tabs.filter((x) => x.key !== key);
     const g = groupOf(key, s);
@@ -1213,7 +1227,7 @@ export function paneAttached(key: string) {
 export function dropTab(key: string, why?: string) {
   const t = state.tabs.find((x) => x.key === key);
   if (!t) return;
-  if (t.termId) api.closeTerminal(t.termId);
+  if (t.termId) api.closeTerminal(t.termId).catch(() => {});
   // A pane that was up for a while starts over at quick tries; one that keeps failing backs off.
   const fresh = !t.retry && Date.now() - (attachedAt.get(key) ?? 0) > 8000;
   const n = fresh ? 1 : (t.retry?.n ?? 1) + 1;
@@ -1224,7 +1238,7 @@ export function dropTab(key: string, why?: string) {
 export function retryNow(key: string) {
   const t = state.tabs.find((x) => x.key === key);
   if (!t) return;
-  if (t.termId) api.closeTerminal(t.termId);
+  if (t.termId) api.closeTerminal(t.termId).catch(() => {});
   attachedAt.delete(key);
   updateTab(key, { termId: undefined, url: undefined, exited: false, error: undefined, spawn: respawn(t), retry: { n: 1, at: Date.now() + 150, why: t.retry?.why } });
 }
@@ -1233,7 +1247,7 @@ export function reattachTab(key: string) {
   const t = state.tabs.find((x) => x.key === key);
   if (!t) return;
   if (persistent(t)) return retryNow(key);
-  if (t.termId) api.closeTerminal(t.termId);
+  if (t.termId) api.closeTerminal(t.termId).catch(() => {});
   // Without tmux a local pane gets a fresh shell where the old one was.
   updateTab(key, { termId: undefined, url: undefined, exited: false, error: undefined, spawn: { dir: t.cwd ?? t.spawn?.dir }, claude: false });
 }
@@ -1392,8 +1406,8 @@ export async function initWindow() {
     // to the user's real sessions from a window nobody sees.
     dormant = !!win.headless && isNativeWebview();
     clearForgotten(win.forgotten ?? []);
-    opening = dormant ? "" : await api.windowLayout().catch(() => "");
-    const tmux = await api.localTmux().catch(() => null);
+    const [layout, tmux] = await Promise.all([dormant ? "" : api.windowLayout().catch(() => ""), api.localTmux().catch(() => null)]);
+    opening = layout;
     const ws = readPref("workspace", false);
     setState({ win, zoom, sidebar: readPref("sidebar") !== "0", winReady: true, welcome: !dormant && windowId === MAIN && readPref(WELCOMED) === null, localTmux: !!tmux?.installed, workspace: ws && state.workspaces.includes(ws) ? ws : null });
   } catch {
@@ -1451,12 +1465,41 @@ export function saveLayout() {
   }
 }
 
+type SavedLayout = { panes: SavedPane[]; groups: Group[]; activeGroup?: string };
+
+/** A layout with its panes under other names. */
+const renameLeaves = (l: Layout, name: (k: string) => string): Layout => ("pane" in l ? { pane: name(l.pane) } : { ...l, children: l.children.map((c) => renameLeaves(c, name)) });
+
+/**
+ * A saved layout made to join tabs that are open already: every pane and tab gets a new name,
+ * and a pane whose session is open here already is left out.
+ */
+function rekey(saved: SavedLayout): SavedLayout {
+  const names = new Map<string, string>();
+  const panes = saved.panes.filter((p) => !(p.session && paneForSession(p.kind === "local" ? LOCAL : (p.machine ?? ""), p.session)));
+  for (const p of panes) names.set(p.key, tabKey());
+  const ids = new Map<string, string>();
+  const groups: Group[] = [];
+  for (const g of saved.groups ?? []) {
+    let layout: Layout | null = g.layout;
+    for (const k of leaves(g.layout)) if (!names.has(k)) layout = layout && remove(layout, k);
+    if (!layout) continue;
+    const id = groupID();
+    ids.set(g.id, id);
+    groups.push({ ...g, id, layout: renameLeaves(layout, (k) => names.get(k) ?? k), focus: names.get(g.focus) ?? names.get(leaves(layout)[0]) ?? "" });
+  }
+  return { panes: panes.map((p) => ({ ...p, key: names.get(p.key)! })), groups, activeGroup: saved.activeGroup && ids.get(saved.activeGroup) };
+}
+
 export function restoreLayout(machineNames: string[]) {
   try {
     const raw = opening || readPref(LAYOUT, false);
     opening = "";
-    if (!raw || state.tabs.length || dormant) return;
-    const saved = JSON.parse(raw) as { panes: SavedPane[]; groups: Group[]; activeGroup?: string };
+    if (!raw || dormant) return;
+    // Tabs opened before the saved ones came back stay; the saved ones join them.
+    const before = state.tabs.length > 0;
+    let saved = JSON.parse(raw) as SavedLayout;
+    if (before) saved = rekey(saved);
     const known = new Set(machineNames);
     const kinds = new Set(["session", "shell", "local"]);
     const panes = saved.panes.filter((p) => kinds.has(p.kind) && (p.kind === "local" || (p.machine && known.has(p.machine))));
@@ -1492,13 +1535,65 @@ export function restoreLayout(machineNames: string[]) {
     tabSeq = Math.max(tabSeq, ...tabs.map((t) => Number(t.key.slice(1)) || 0));
     groupSeq = Math.max(groupSeq, ...groups.map((g) => Number(g.id.slice(1)) || 0));
     if (!tabs.length) return;
+    if (before) {
+      // What is open stays in front; the saved tabs join it.
+      setState((s) => ({ tabs: [...s.tabs, ...tabs], groups: [...s.groups, ...groups] }));
+      return;
+    }
     const active = groups.find((g) => g.id === saved.activeGroup) ?? groups[0];
     // The tab in front decides the workspace on show, so the app opens on what was open.
     const workspace = state.workspace !== null && active.ws !== state.workspace ? (active.ws ?? null) : state.workspace;
     setState({ tabs, groups, activeGroup: active.id, activeTab: active.focus, workspace });
   } catch {
     /* ignore a bad saved layout */
+  } finally {
+    // The layout is kept from now on; not before, so a window that hasn't brought its tabs
+    // back yet can't write over them.
+    layoutRestored = true;
+    saveLayoutSoon();
   }
+}
+
+// ---------- keeping the layout ----------
+
+let layoutRestored = false;
+let layoutTimer: number | undefined;
+
+function saveLayoutSoon() {
+  if (!layoutRestored) return;
+  window.clearTimeout(layoutTimer);
+  layoutTimer = window.setTimeout(flushLayout, 300);
+}
+
+function flushLayout() {
+  window.clearTimeout(layoutTimer);
+  layoutTimer = undefined;
+  if (layoutRestored) saveLayout();
+}
+
+/**
+ * Keeps the layout saved: soon after tabs, splits or the tab in front change, and at once when
+ * the window goes away (whatever is still waiting is written then). Outside React, so nothing
+ * re-renders for it.
+ */
+function watchLayout() {
+  let tabs = state.tabs;
+  let groups = state.groups;
+  let active = state.activeGroup;
+  listeners.add(() => {
+    if (state.tabs === tabs && state.groups === groups && state.activeGroup === active) return;
+    tabs = state.tabs;
+    groups = state.groups;
+    active = state.activeGroup;
+    saveLayoutSoon();
+  });
+  const now = () => {
+    if (layoutTimer !== undefined) flushLayout();
+  };
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") now();
+  });
+  window.addEventListener("pagehide", now);
 }
 
 export function sessionFor(tab: Tab | undefined, sessions: Session[]): Session | undefined {
@@ -1579,7 +1674,37 @@ export function isDark(): boolean {
 // ---------- wiring backend events ----------
 
 let wired = false;
+// Lines from running operations come in bursts (a build prints hundreds a second): they are
+// taken in together, once a frame, instead of one re-render each.
+let opQueue: OpEvent[] = [];
+let opQueued = false;
+function takeOpEvents() {
+  opQueued = false;
+  if (!opQueue.length) return;
+  const batch = opQueue;
+  opQueue = [];
+  const byOp = new Map<string, OpEvent[]>();
+  for (const ev of batch) {
+    const list = byOp.get(ev.op);
+    if (list) list.push(ev);
+    else byOp.set(ev.op, [ev]);
+  }
+  setState((s) => {
+    const ops = { ...s.ops };
+    for (const [id, evs] of byOp) {
+      const cur = ops[id];
+      if (!cur) continue;
+      let events = [...cur.events, ...evs];
+      if (events.length > 3000) events = events.slice(-2000);
+      const step = evs.findLast((e) => e.level !== "log");
+      ops[id] = { ...cur, info: step ? { ...cur.info, lastLine: step.message } : cur.info, events };
+    }
+    return { ops };
+  });
+}
+
 export function wireEvents() {
+  watchLayout();
   if (wired) return;
   wired = true;
   on<string>("app-icon", (appIcon) => setState((s) => (s.info ? { info: { ...s.info, appIcon } } : {})));
@@ -1590,15 +1715,15 @@ export function wireEvents() {
     }));
   });
   on<OpEvent>("op", (ev) => {
-    setState((s) => {
-      const cur = s.ops[ev.op];
-      if (!cur) return {};
-      const events = cur.events.length > 3000 ? [...cur.events.slice(-2000), ev] : [...cur.events, ev];
-      const info = ev.level === "log" ? cur.info : { ...cur.info, lastLine: ev.message };
-      return { ops: { ...s.ops, [ev.op]: { ...cur, info, events } } };
-    });
+    opQueue.push(ev);
+    if (opQueued) return;
+    opQueued = true;
+    // Once a frame, or soon in a window that isn't drawing frames (hidden).
+    requestAnimationFrame(takeOpEvents);
+    window.setTimeout(takeOpEvents, 100);
   });
   on<OpEnd>("op:end", (end) => {
+    takeOpEvents(); // its last lines first
     const cur = state.ops[end.op];
     setState((s) => {
       const c = s.ops[end.op];
@@ -1619,7 +1744,7 @@ export function wireEvents() {
   on<MachineView[]>("machines", (machines) => {
     const isUp = (m: MachineView) => m.machine.status === "running" || !m.machine.status;
     const wasUp = new Set(state.machines.filter(isUp).map((m) => m.machine.name));
-    setState({ machines, machinesLoaded: true });
+    setState({ machines, machinesLoaded: true, machinesKnown: true });
     // A machine that just came up: panes waiting on it attach now, not at their next try.
     const cameUp = new Set(machines.filter((m) => isUp(m) && !wasUp.has(m.machine.name)).map((m) => m.machine.name));
     for (const t of state.tabs) if (t.retry && t.machine && cameUp.has(t.machine)) retryNow(t.key);
@@ -1662,7 +1787,6 @@ export function wireEvents() {
     });
     if (w.error) toast("error", "Folder watch stopped", w.error);
   });
-  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => applyTheme(state.theme));
 }
 
 /** Installs the downloaded update: every window quits and comes back on the new version. */

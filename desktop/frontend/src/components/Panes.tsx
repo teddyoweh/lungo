@@ -33,6 +33,7 @@ import {
   type Group,
   type Tab,
   setState,
+  getState,
 } from "../lib/store";
 import { dragSizes, isLeaf, node, type Divider, type Rect } from "../lib/panes";
 import { agentOf, cx, hasAgent, mod } from "../lib/util";
@@ -299,13 +300,22 @@ function PaneMenu({ tab }: { tab: Tab }) {
 /** The draggable line between two panes. */
 export function DividerHandle({ group, d, area }: { group: Group; d: Divider; area: React.RefObject<HTMLDivElement | null> }) {
   const dragging = useRef(false);
+  const at = useRef(0);
+  const frame = useRef(0);
   const row = d.dir === "row";
+  // The pointer can move many times a frame: the panes are resized once a frame, to where it
+  // is by then.
   const move = (e: React.PointerEvent) => {
     if (!dragging.current || !area.current) return;
     const box = area.current.getBoundingClientRect();
-    const at = row ? (e.clientX - box.left) / box.width : (e.clientY - box.top) / box.height;
-    const sizes = dragSizes(group.layout, d, at);
-    if (sizes.length) resizeGroup(group.id, d.path, sizes);
+    at.current = row ? (e.clientX - box.left) / box.width : (e.clientY - box.top) / box.height;
+    if (frame.current) return;
+    frame.current = requestAnimationFrame(() => {
+      frame.current = 0;
+      const g = getState().groups.find((x) => x.id === group.id);
+      const sizes = g ? dragSizes(g.layout, d, at.current) : [];
+      if (sizes.length) resizeGroup(group.id, d.path, sizes);
+    });
   };
   return (
     <div

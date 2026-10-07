@@ -13,7 +13,6 @@ import {
   openLocalTab,
   refreshMachines,
   restoreLayout,
-  saveLayout,
   setState,
   setZoom,
   splitPane,
@@ -252,39 +251,44 @@ export function App() {
   const modal = useStore((s) => s.modal);
   const welcome = useStore((s) => s.welcome);
   const sheet = useStore((s) => s.machineSheet);
-  const machinesLoaded = useStore((s) => s.machinesLoaded);
-  const tabs = useStore((s) => s.tabs);
-  const groups = useStore((s) => s.groups);
-  const activeGroup = useStore((s) => s.activeGroup);
+  const machinesKnown = useStore((s) => s.machinesKnown);
   const windowReady = useStore((s) => s.winReady);
   const restored = useRef(false);
 
-  // Bring back the pane layout from last time once machines are known, then keep it saved.
+  // Bring back the pane layout from last time once the machines are really known (a failed
+  // read would drop every tab on a machine). The store keeps it saved from then on.
   useEffect(() => {
-    if (!machinesLoaded || !windowReady || restored.current) return;
-    restoreLayout(getState().machines.map((m) => m.machine.name));
+    if (!machinesKnown || !windowReady || restored.current) return;
     restored.current = true;
-  }, [machinesLoaded, windowReady]);
-  useEffect(() => {
-    if (!restored.current) return;
-    const t = window.setTimeout(saveLayout, 300);
-    return () => window.clearTimeout(t);
-  }, [tabs, groups, activeGroup]);
+    restoreLayout(getState().machines.map((m) => m.machine.name));
+  }, [machinesKnown, windowReady]);
 
   useEffect(() => {
     wireEvents();
-    api.info().then((info) => {
-      document.documentElement.dataset.platform = info.platform;
-      setState({ info });
-    });
+    api
+      .info()
+      .then((info) => {
+        document.documentElement.dataset.platform = info.platform;
+        setState({ info });
+      })
+      .catch(() => {});
     loadMachines();
     loadSessions();
-    api.tunnels().then((tunnels) => setState({ tunnels: tunnels ?? [] }));
-    api.lastSyncAll().then((r) => setState({ syncResults: r ?? {} }));
-    api.ops().then((ops) => {
-      const map = Object.fromEntries(ops.map((o) => [o.id, { info: o, events: [] }]));
-      setState({ ops: map, opOrder: ops.map((o) => o.id) });
-    });
+    api
+      .tunnels()
+      .then((tunnels) => setState({ tunnels: tunnels ?? [] }))
+      .catch(() => {});
+    api
+      .lastSyncAll()
+      .then((r) => setState({ syncResults: r ?? {} }))
+      .catch(() => {});
+    api
+      .ops()
+      .then((ops) => {
+        const map = Object.fromEntries(ops.map((o) => [o.id, { info: o, events: [] }]));
+        setState({ ops: map, opOrder: ops.map((o) => o.id) });
+      })
+      .catch(() => {});
     initWindow();
     const off = on<string>("menu", (name, ...args) => fire("menu", name, ...args));
     // In a plain browser (wails dev) there is no native menu, so every shortcut is handled here.
