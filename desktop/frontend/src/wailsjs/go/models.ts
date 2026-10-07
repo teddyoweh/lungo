@@ -818,6 +818,7 @@ export namespace engine {
 	    alt?: boolean;
 	    scrollKey?: boolean;
 	    agent?: string;
+	    stale?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new Session(source);
@@ -848,6 +849,7 @@ export namespace engine {
 	        this.alt = source["alt"];
 	        this.scrollKey = source["scrollKey"];
 	        this.agent = source["agent"];
+	        this.stale = source["stale"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

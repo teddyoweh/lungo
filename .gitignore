@@ -9,3 +9,6 @@ desktop/frontend/wailsjs/
 .DS_Store
 /sky
 /desktop/desktop
+
+# agent worktrees
+/.claude/worktrees/
