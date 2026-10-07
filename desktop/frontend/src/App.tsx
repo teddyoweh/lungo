@@ -265,18 +265,30 @@ export function App() {
 
   useEffect(() => {
     wireEvents();
-    api.info().then((info) => {
-      document.documentElement.dataset.platform = info.platform;
-      setState({ info });
-    });
+    api
+      .info()
+      .then((info) => {
+        document.documentElement.dataset.platform = info.platform;
+        setState({ info });
+      })
+      .catch(() => {});
     loadMachines();
     loadSessions();
-    api.tunnels().then((tunnels) => setState({ tunnels: tunnels ?? [] }));
-    api.lastSyncAll().then((r) => setState({ syncResults: r ?? {} }));
-    api.ops().then((ops) => {
-      const map = Object.fromEntries(ops.map((o) => [o.id, { info: o, events: [] }]));
-      setState({ ops: map, opOrder: ops.map((o) => o.id) });
-    });
+    api
+      .tunnels()
+      .then((tunnels) => setState({ tunnels: tunnels ?? [] }))
+      .catch(() => {});
+    api
+      .lastSyncAll()
+      .then((r) => setState({ syncResults: r ?? {} }))
+      .catch(() => {});
+    api
+      .ops()
+      .then((ops) => {
+        const map = Object.fromEntries(ops.map((o) => [o.id, { info: o, events: [] }]));
+        setState({ ops: map, opOrder: ops.map((o) => o.id) });
+      })
+      .catch(() => {});
     initWindow();
     const off = on<string>("menu", (name, ...args) => fire("menu", name, ...args));
     // In a plain browser (wails dev) there is no native menu, so every shortcut is handled here.

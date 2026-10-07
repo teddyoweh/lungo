@@ -137,6 +137,7 @@ export interface Session {
   alt?: boolean; // the program uses the whole screen rather than a command line
   scrollKey?: boolean; // the machine's tmux knows sky's key for leaving scrollback
   agent?: string; // the coding agent running in it: claude | codex | grok | mantis
+  stale?: boolean; // its machine couldn't be reached on the last look: this is what it had before
 }
 /** What a pane shows about the repository its folder is in. */
 export interface GitInfo {

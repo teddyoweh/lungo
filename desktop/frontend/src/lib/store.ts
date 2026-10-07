@@ -490,7 +490,8 @@ export async function loadSessions() {
 const sessionKey = (s: Session) => `${s.machine}/${s.name}`;
 const sameSession = (a: Session, b: Session) =>
   a.activity === b.activity && a.state === b.state && a.message === b.message && a.path === b.path && a.command === b.command &&
-  a.attached === b.attached && a.claude === b.claude && a.stateAt === b.stateAt && a.windows === b.windows && a.title === b.title && a.sid === b.sid && a.flags === b.flags && a.branch === b.branch && a.oldLogin === b.oldLogin;
+  a.attached === b.attached && a.claude === b.claude && a.stateAt === b.stateAt && a.windows === b.windows && a.title === b.title && a.sid === b.sid && a.flags === b.flags && a.branch === b.branch && a.oldLogin === b.oldLogin &&
+  a.mouse === b.mouse && a.alt === b.alt && a.scrollKey === b.scrollKey && a.agent === b.agent && a.stale === b.stale;
 
 /**
  * Takes a sessions poll. Sessions that didn't change keep their object (and the whole list
@@ -1122,7 +1123,7 @@ export function closeTab(key: string) {
 /** Takes a pane away, leaving its session as it is (closing it, or moving it to another window). */
 function releaseTab(key: string) {
   const t = state.tabs.find((x) => x.key === key);
-  if (t?.termId) api.closeTerminal(t.termId);
+  if (t?.termId) api.closeTerminal(t.termId).catch(() => {});
   setState((s) => {
     const tabs = s.tabs.filter((x) => x.key !== key);
     const g = groupOf(key, s);
@@ -1226,7 +1227,7 @@ export function paneAttached(key: string) {
 export function dropTab(key: string, why?: string) {
   const t = state.tabs.find((x) => x.key === key);
   if (!t) return;
-  if (t.termId) api.closeTerminal(t.termId);
+  if (t.termId) api.closeTerminal(t.termId).catch(() => {});
   // A pane that was up for a while starts over at quick tries; one that keeps failing backs off.
   const fresh = !t.retry && Date.now() - (attachedAt.get(key) ?? 0) > 8000;
   const n = fresh ? 1 : (t.retry?.n ?? 1) + 1;
@@ -1237,7 +1238,7 @@ export function dropTab(key: string, why?: string) {
 export function retryNow(key: string) {
   const t = state.tabs.find((x) => x.key === key);
   if (!t) return;
-  if (t.termId) api.closeTerminal(t.termId);
+  if (t.termId) api.closeTerminal(t.termId).catch(() => {});
   attachedAt.delete(key);
   updateTab(key, { termId: undefined, url: undefined, exited: false, error: undefined, spawn: respawn(t), retry: { n: 1, at: Date.now() + 150, why: t.retry?.why } });
 }
@@ -1246,7 +1247,7 @@ export function reattachTab(key: string) {
   const t = state.tabs.find((x) => x.key === key);
   if (!t) return;
   if (persistent(t)) return retryNow(key);
-  if (t.termId) api.closeTerminal(t.termId);
+  if (t.termId) api.closeTerminal(t.termId).catch(() => {});
   // Without tmux a local pane gets a fresh shell where the old one was.
   updateTab(key, { termId: undefined, url: undefined, exited: false, error: undefined, spawn: { dir: t.cwd ?? t.spawn?.dir }, claude: false });
 }
@@ -1786,7 +1787,6 @@ export function wireEvents() {
     });
     if (w.error) toast("error", "Folder watch stopped", w.error);
   });
-  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => applyTheme(state.theme));
 }
 
 /** Installs the downloaded update: every window quits and comes back on the new version. */

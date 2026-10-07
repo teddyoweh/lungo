@@ -319,7 +319,7 @@ export const TerminalView = memo(function TerminalView({ tab, active, focused }:
     });
     const f = new FitAddon();
     t.loadAddon(f);
-    t.loadAddon(new WebLinksAddon((_e, uri) => api.openURL(uri)));
+    t.loadAddon(new WebLinksAddon((_e, uri) => void api.openURL(uri).catch(() => {})));
     const u = new Unicode11Addon();
     t.loadAddon(u);
     t.unicode.activeVersion = "11";
@@ -379,7 +379,7 @@ export const TerminalView = memo(function TerminalView({ tab, active, focused }:
       if (!b64 || b64 === "?" || b64.length > 4_000_000) return true;
       try {
         const text = new TextDecoder().decode(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)));
-        if (text && (text !== lastCopy.text || Date.now() - lastCopy.at > 1000)) api.copy(text);
+        if (text && (text !== lastCopy.text || Date.now() - lastCopy.at > 1000)) api.copy(text).catch(() => {});
         lastCopy = { text, at: Date.now() };
       } catch {
         /* not base64 */
@@ -437,7 +437,7 @@ export const TerminalView = memo(function TerminalView({ tab, active, focused }:
       window.clearTimeout(copyTimer);
       copyTimer = window.setTimeout(() => {
         const s = t.getSelection();
-        if (s) api.copy(s);
+        if (s) api.copy(s).catch(() => {});
       }, 250);
     });
     // ⌘C with nothing selected in xterm leaves the clipboard alone (what Claude copied stays).
@@ -592,7 +592,7 @@ export const TerminalView = memo(function TerminalView({ tab, active, focused }:
     e.preventDefault();
     const sel = t.getSelection();
     const rows: MenuRow[] = [
-      { label: "Copy", hint: "⌘C", disabled: !sel, onClick: () => void api.copy(sel) },
+      { label: "Copy", hint: "⌘C", disabled: !sel, onClick: () => void api.copy(sel).catch(() => {}) },
       {
         label: "Paste",
         hint: "⌘V",

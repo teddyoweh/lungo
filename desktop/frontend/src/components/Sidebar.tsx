@@ -367,7 +367,7 @@ export function Sidebar() {
             {machines.map((mv) => (
               <MachineGroup key={mv.machine.name} mv={mv} sessions={byMachine[mv.machine.name] ?? []} error={sessionsView.errors[mv.machine.name]} activeKey={activeKey} />
             ))}
-            <LocalGroup sessions={byMachine[LOCAL] ?? []} activeKey={activeKey} />
+            <LocalGroup sessions={byMachine[LOCAL] ?? []} error={sessionsView.errors[LOCAL]} activeKey={activeKey} />
             <OtherSessions sessions={others} machines={machines} filtering={!!filter} activeKey={activeKey} />
           </>
         )}
@@ -577,7 +577,7 @@ function MachineChips({ machines, errors, active }: { machines: MachineView[]; e
             </button>
           );
         })}
-        <button onClick={(e) => menu(e, null)} title="This computer: new session or shell" className={cx(chip, active && "bg-active text-fg")}>
+        <button onClick={(e) => menu(e, null)} title={errors[LOCAL] ? `This computer: can't read its sessions right now (${errors[LOCAL]})` : "This computer: new session or shell"} className={cx(chip, active && "bg-active text-fg", errors[LOCAL] && "opacity-55")}>
           <LocalIcon size={12} />
           <span className="truncate">This Mac</span>
         </button>
@@ -1096,11 +1096,11 @@ const SessionRow = memo(function SessionRow({ s, activeKey, grouped, where = tru
         setDragged({ machine: s.machine, session: s.name });
       }}
       onDragEnd={() => setDragged(null)}
-      title={`${title}\n${machineLabel(s.machine)} · ${s.path}${s.branch ? ` · ${s.branch}` : ""}\n${s.message || s.name}${s.oldLogin && s.claude ? "\nStill on the previous account's login: moves to the current one as soon as it is idle." : ""}\n⌘-click to pick several · drag onto a pane to put it beside · right-click for more`}
+      title={`${s.stale ? `Last known: can't reach ${machineLabel(s.machine)} right now\n` : ""}${title}\n${machineLabel(s.machine)} · ${s.path}${s.branch ? ` · ${s.branch}` : ""}\n${s.message || s.name}${s.oldLogin && s.claude ? "\nStill on the previous account's login: moves to the current one as soon as it is idle." : ""}\n⌘-click to pick several · drag onto a pane to put it beside · right-click for more`}
       className={cx(
         "group/row no-drag relative flex w-full items-start gap-2 rounded-md py-[5px] pr-2 pl-2 text-left transition-colors",
         isPicked ? "bg-[color-mix(in_srgb,var(--accent)_16%,transparent)]" : active ? "bg-active" : "hover:bg-hover",
-        b === "done" && !active && "opacity-55",
+        (b === "done" || s.stale) && !active && "opacity-55",
       )}
     >
       {color && <span className="absolute top-[8px] bottom-[8px] left-0 w-[2px] rounded-full" style={{ background: color }} />}
@@ -1151,7 +1151,7 @@ function agentMenu(e: React.MouseEvent<HTMLElement>, machine: string) {
 }
 
 /** This computer: a click opens a terminal here; its running sessions are listed like a machine's. */
-function LocalGroup({ sessions, activeKey }: { sessions: Session[]; activeKey: string }) {
+function LocalGroup({ sessions, error, activeKey }: { sessions: Session[]; error?: string; activeKey: string }) {
   const view = useStore((s) => s.view);
   const [open, setOpen] = useState(true);
   const needs = sessions.filter((s) => hasAgent(s) && s.state === "waiting").length;
@@ -1188,6 +1188,12 @@ function LocalGroup({ sessions, activeKey }: { sessions: Session[]; activeKey: s
           </>
         }
       />
+      {/* tmux here couldn't be read: say so, rather than look like nothing is running */}
+      {error && (
+        <div title={error} className="truncate pl-[31px] text-[11px] leading-[20px] text-subtle">
+          Can't read this Mac's sessions right now
+        </div>
+      )}
       {open && <SessionRows list={sessions} activeKey={activeKey} />}
     </div>
   );
