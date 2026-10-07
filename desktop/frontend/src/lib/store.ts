@@ -1673,6 +1673,35 @@ export function isDark(): boolean {
 // ---------- wiring backend events ----------
 
 let wired = false;
+// Lines from running operations come in bursts (a build prints hundreds a second): they are
+// taken in together, once a frame, instead of one re-render each.
+let opQueue: OpEvent[] = [];
+let opQueued = false;
+function takeOpEvents() {
+  opQueued = false;
+  if (!opQueue.length) return;
+  const batch = opQueue;
+  opQueue = [];
+  const byOp = new Map<string, OpEvent[]>();
+  for (const ev of batch) {
+    const list = byOp.get(ev.op);
+    if (list) list.push(ev);
+    else byOp.set(ev.op, [ev]);
+  }
+  setState((s) => {
+    const ops = { ...s.ops };
+    for (const [id, evs] of byOp) {
+      const cur = ops[id];
+      if (!cur) continue;
+      let events = [...cur.events, ...evs];
+      if (events.length > 3000) events = events.slice(-2000);
+      const step = evs.findLast((e) => e.level !== "log");
+      ops[id] = { ...cur, info: step ? { ...cur.info, lastLine: step.message } : cur.info, events };
+    }
+    return { ops };
+  });
+}
+
 export function wireEvents() {
   watchLayout();
   if (wired) return;
@@ -1685,15 +1714,15 @@ export function wireEvents() {
     }));
   });
   on<OpEvent>("op", (ev) => {
-    setState((s) => {
-      const cur = s.ops[ev.op];
-      if (!cur) return {};
-      const events = cur.events.length > 3000 ? [...cur.events.slice(-2000), ev] : [...cur.events, ev];
-      const info = ev.level === "log" ? cur.info : { ...cur.info, lastLine: ev.message };
-      return { ops: { ...s.ops, [ev.op]: { ...cur, info, events } } };
-    });
+    opQueue.push(ev);
+    if (opQueued) return;
+    opQueued = true;
+    // Once a frame, or soon in a window that isn't drawing frames (hidden).
+    requestAnimationFrame(takeOpEvents);
+    window.setTimeout(takeOpEvents, 100);
   });
   on<OpEnd>("op:end", (end) => {
+    takeOpEvents(); // its last lines first
     const cur = state.ops[end.op];
     setState((s) => {
       const c = s.ops[end.op];

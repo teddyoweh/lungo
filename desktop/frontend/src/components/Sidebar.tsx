@@ -1,7 +1,7 @@
 // The sidebar: where to go (an icon row), every session that is running, and Claude usage.
 // It is built for many sessions at once: rows say what a session is, where it is and how it
 // is doing; the list is grouped by what needs you (or by machine), and a filter narrows it.
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, memo, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
   AppWindow,
   ArrowDownToLine,
@@ -67,7 +67,7 @@ import { leaves, type Layout } from "../lib/panes";
 import { tabMenu } from "../views/Sessions";
 import { appIconSrc } from "../lib/appicons";
 import { agentOf, ago, cx, hasAgent, mod, sessionTime, sessionTone, tildePath } from "../lib/util";
-import { IconButton, SidebarToggle, WorkingMark, Spinner, useNow } from "./ui";
+import { IconButton, SidebarToggle, WorkingMark, Spinner } from "./ui";
 import { AgentIcon, LocalIcon, ProviderIcon } from "./Brand";
 import { askConfirm, askText, showMenu, type MenuRow } from "./ContextMenu";
 import { agentRows } from "./AgentMenu";
@@ -141,14 +141,10 @@ export function Sidebar() {
   const sessionsView = useStore((s) => s.sessions);
   const platform = useStore((s) => s.info?.platform);
   const appIcon = useStore((s) => s.info?.appIcon);
-  const ops = useStore((s) => s.ops);
-  const opOrder = useStore((s) => s.opOrder);
-  const running = useStore(opsRunning);
   const tabs = useStore((s) => s.tabs);
   const activeTab = useStore((s) => s.activeTab);
   const meta = useStore((s) => s.meta);
   const shown = useStore((s) => s.sidebar);
-  const now = useNow(20000);
   const [mode, setModeState] = useState<Mode>(() => (pref("sky.sidebar.mode", "status") === "machine" ? "machine" : "status"));
   const [filter, setFilter] = useState("");
   const input = useRef<HTMLInputElement>(null);
@@ -178,6 +174,13 @@ export function Sidebar() {
     }
     return [mine, rest.sort(byUrgency)];
   }, [sessionsView, filter, meta, here]);
+  // The list by status, worked out when the sessions change (not on every render).
+  const byBucket = useMemo(() => {
+    const m = Object.fromEntries(BUCKETS.map((b) => [b.id, [] as Session[]])) as Record<Bucket, Session[]>;
+    for (const s of sessions) m[bucket(s)].push(s);
+    for (const list of Object.values(m)) list.sort(byUrgency);
+    return m;
+  }, [sessions]);
   const byMachine = useMemo(() => {
     const m: Record<string, Session[]> = {};
     for (const s of sessions) (m[s.machine] ??= []).push(s);
@@ -346,10 +349,10 @@ export function Sidebar() {
         {mode === "status" ? (
           <>
             {BUCKETS.map((b) => (
-              <Section key={b.id} id={b.id} label={b.label} sessions={sessions.filter((s) => bucket(s) === b.id).sort(byUrgency)} machines={machines} activeKey={activeKey} now={now} />
+              <Section key={b.id} id={b.id} label={b.label} sessions={byBucket[b.id]} machines={machines} activeKey={activeKey} />
             ))}
             {sessions.length === 0 && <div className="px-2 py-6 text-center text-[11.5px] text-subtle">{filter ? (others.length ? "Nothing here matches." : "No session matches.") : others.length ? `Nothing open in this window. ${mod}T starts a session.` : `No sessions running. ${mod}T starts one.`}</div>}
-            <OtherSessions sessions={others} machines={machines} filtering={!!filter} activeKey={activeKey} now={now} />
+            <OtherSessions sessions={others} machines={machines} filtering={!!filter} activeKey={activeKey} />
           </>
         ) : (
           <>
@@ -362,10 +365,10 @@ export function Sidebar() {
               </button>
             )}
             {machines.map((mv) => (
-              <MachineGroup key={mv.machine.name} mv={mv} sessions={byMachine[mv.machine.name] ?? []} error={sessionsView.errors[mv.machine.name]} activeKey={activeKey} now={now} />
+              <MachineGroup key={mv.machine.name} mv={mv} sessions={byMachine[mv.machine.name] ?? []} error={sessionsView.errors[mv.machine.name]} activeKey={activeKey} />
             ))}
-            <LocalGroup sessions={byMachine[LOCAL] ?? []} activeKey={activeKey} now={now} />
-            <OtherSessions sessions={others} machines={machines} filtering={!!filter} activeKey={activeKey} now={now} />
+            <LocalGroup sessions={byMachine[LOCAL] ?? []} activeKey={activeKey} />
+            <OtherSessions sessions={others} machines={machines} filtering={!!filter} activeKey={activeKey} />
           </>
         )}
       </div>
@@ -392,29 +395,7 @@ export function Sidebar() {
         </div>
       )}
       {mode === "status" && <MachineChips machines={machines} errors={sessionsView.errors} active={activeKey === "local" && view === "sessions"} />}
-      {running > 0 && (
-        <div className="px-2.5 py-2">
-          {opOrder
-            .filter((id) => ops[id]?.info.running)
-            .slice(0, 3)
-            .map((id) => {
-              const o = ops[id];
-              return (
-                <button
-                  key={id}
-                  onClick={() => setState({ modal: { type: "op", id } })}
-                  className="no-drag flex w-full items-start gap-2 rounded-md px-1.5 py-1.5 text-left hover:bg-hover"
-                >
-                  <Spinner size={13} className="mt-0.5 text-accent" />
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-[12px] font-medium text-fg">{o.info.title}</div>
-                    {o.info.lastLine && <div className="truncate text-[11px] text-subtle">{o.info.lastLine}</div>}
-                  </div>
-                </button>
-              );
-            })}
-        </div>
-      )}
+      <RunningOps />
       <UpdateReady />
       <UsageFooter />
     </aside>
@@ -422,7 +403,7 @@ export function Sidebar() {
 }
 
 /** One group of the list by status: its name, how many, the sessions. Collapsing is remembered. */
-function Section({ id, label, sessions, machines, activeKey, now }: { id: Bucket; label: string; sessions: Session[]; machines: MachineView[]; activeKey: string; now: number }) {
+function Section({ id, label, sessions, machines, activeKey }: { id: Bucket; label: string; sessions: Session[]; machines: MachineView[]; activeKey: string }) {
   // Finished sessions start folded away: they are there to be tidied, not looked at.
   const [open, setOpenState] = useState(() => pref(`sky.sidebar.open.${id}`, id === "done" ? "0" : "1") === "1");
   if (sessions.length === 0) return null;
@@ -458,8 +439,39 @@ function Section({ id, label, sessions, machines, activeKey, now }: { id: Bucket
                 <span className="truncate">{m ? m.name : "This Mac"}</span>
                 {mine.length > 1 && <span className="tabular-nums opacity-70">{mine.length}</span>}
               </div>
-              <SessionRows list={mine} activeKey={activeKey} now={now} grouped />
+              <SessionRows list={mine} activeKey={activeKey} grouped />
             </div>
+          );
+        })}
+    </div>
+  );
+}
+
+/** What is running (a machine being made, a sync): up to three, each with its latest line. */
+function RunningOps() {
+  const ops = useStore((s) => s.ops);
+  const opOrder = useStore((s) => s.opOrder);
+  const running = useStore(opsRunning);
+  if (running === 0) return null;
+  return (
+    <div className="px-2.5 py-2">
+      {opOrder
+        .filter((id) => ops[id]?.info.running)
+        .slice(0, 3)
+        .map((id) => {
+          const o = ops[id];
+          return (
+            <button
+              key={id}
+              onClick={() => setState({ modal: { type: "op", id } })}
+              className="no-drag flex w-full items-start gap-2 rounded-md px-1.5 py-1.5 text-left hover:bg-hover"
+            >
+              <Spinner size={13} className="mt-0.5 text-accent" />
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-[12px] font-medium text-fg">{o.info.title}</div>
+                {o.info.lastLine && <div className="truncate text-[11px] text-subtle">{o.info.lastLine}</div>}
+              </div>
+            </button>
           );
         })}
     </div>
@@ -488,7 +500,7 @@ function UpdateReady() {
  * by default (unfolded while filtering). A click goes to the window that shows one, or opens
  * it here when no window does; "Open in this window" brings one over.
  */
-function OtherSessions({ sessions, machines, filtering, activeKey, now }: { sessions: Session[]; machines: MachineView[]; filtering: boolean; activeKey: string; now: number }) {
+function OtherSessions({ sessions, machines, filtering, activeKey }: { sessions: Session[]; machines: MachineView[]; filtering: boolean; activeKey: string }) {
   const [open, setOpenState] = useState(() => pref("sky.sidebar.open.others", "0") === "1");
   if (sessions.length === 0) return null;
   const shown = open || filtering;
@@ -528,7 +540,7 @@ function OtherSessions({ sessions, machines, filtering, activeKey, now }: { sess
                 <span className="truncate">{m ? m.name : "This Mac"}</span>
               </div>
               {mine.map((s) => (
-                <SessionRow key={`${s.machine}/${s.name}`} s={s} activeKey={activeKey} now={now} />
+                <SessionRow key={`${s.machine}/${s.name}`} s={s} activeKey={activeKey} />
               ))}
             </div>
           );
@@ -639,7 +651,7 @@ function useWarn(name: string): string | undefined {
   return h && !h.error && h.warnings.length ? h.warnings.join("\n") : undefined;
 }
 
-function MachineGroup({ mv, sessions, error, activeKey, now }: { mv: MachineView; sessions: Session[]; error?: string; activeKey: string; now: number }) {
+function MachineGroup({ mv, sessions, error, activeKey }: { mv: MachineView; sessions: Session[]; error?: string; activeKey: string }) {
   const m = mv.machine;
   const [open, setOpen] = useState(true);
   const stopped = m.status === "stopped" || m.status === "missing";
@@ -688,7 +700,7 @@ function MachineGroup({ mv, sessions, error, activeKey, now }: { mv: MachineView
               Start a session
             </button>
           )}
-          <SessionRows list={sessions} activeKey={activeKey} now={now} />
+          <SessionRows list={sessions} activeKey={activeKey} />
         </div>
       )}
     </div>
@@ -754,13 +766,56 @@ function sessionMenu(s: Session): MenuRow[] {
   ];
 }
 
-/** The tab shortcut that goes to a session (⌘3), when it is open in one of the first nine tabs. */
-function tabShortcut(x: State, s: Session): string {
-  if (mod.length !== 1) return ""; // only where the shortcut is one glyph
-  const t = x.tabs.find((t) => t.session === s.name && tabMachine(t) === s.machine);
-  if (!t) return "";
-  const i = visibleGroups(x).findIndex((g) => leaves(g.layout).includes(t.key));
-  return i >= 0 && i < 9 ? `${mod}${i + 1}` : "";
+/**
+ * The tab shortcut that goes to each session (⌘3), for sessions open in one of the first nine
+ * tabs. Worked out once whenever the tabs change, not by every row on every change.
+ */
+let shortcutsFor: { tabs: State["tabs"]; groups: State["groups"]; workspace: State["workspace"]; map: Map<string, string> } | null = null;
+function tabShortcuts(x: State): Map<string, string> {
+  if (shortcutsFor && shortcutsFor.tabs === x.tabs && shortcutsFor.groups === x.groups && shortcutsFor.workspace === x.workspace) return shortcutsFor.map;
+  const map = new Map<string, string>();
+  if (mod.length === 1) {
+    // only where the shortcut is one glyph
+    const panes = new Map(x.tabs.map((t) => [t.key, t]));
+    visibleGroups(x)
+      .slice(0, 9)
+      .forEach((g, i) => {
+        for (const k of leaves(g.layout)) {
+          const t = panes.get(k);
+          const m = t && tabMachine(t);
+          if (m && t.session && !map.has(`${m}/${t.session}`)) map.set(`${m}/${t.session}`, `${mod}${i + 1}`);
+        }
+      });
+  }
+  shortcutsFor = { tabs: x.tabs, groups: x.groups, workspace: x.workspace, map };
+  return map;
+}
+
+// One clock for every "5m" on screen, moving every 20 seconds while any is shown.
+let clockNow = Date.now();
+const clockSubs = new Set<() => void>();
+let clockTimer: number | undefined;
+function subscribeClock(fn: () => void) {
+  clockSubs.add(fn);
+  if (clockTimer === undefined) {
+    clockNow = Date.now();
+    clockTimer = window.setInterval(() => {
+      clockNow = Date.now();
+      clockSubs.forEach((f) => f());
+    }, 20000);
+  }
+  return () => {
+    clockSubs.delete(fn);
+    if (clockSubs.size) return;
+    window.clearInterval(clockTimer);
+    clockTimer = undefined;
+  };
+}
+
+/** How long ago something happened ("5m"), kept current without re-drawing the row around it. */
+function Ago({ t }: { t: number }) {
+  const now = useSyncExternalStore(subscribeClock, () => clockNow);
+  return <>{ago(new Date(t || now).toISOString(), now)}</>;
 }
 
 /**
@@ -802,7 +857,7 @@ const mainBranch = (b?: string) => !b || b === "main" || b === "master";
  * that tab: its name and ⊞ count as in the tab bar, its sessions nested under it. A click on
  * the name goes to the tab. The group sits where the list puts its most urgent session.
  */
-function SessionRows({ list, activeKey, now, grouped }: { list: Session[]; activeKey: string; now: number; grouped?: boolean }) {
+function SessionRows({ list, activeKey, grouped }: { list: Session[]; activeKey: string; grouped?: boolean }) {
   const tabs = useStore((x) => x.tabs);
   const groups = useStore((x) => x.groups);
   const activeGroup = useStore((x) => x.activeGroup);
@@ -837,9 +892,9 @@ function SessionRows({ list, activeKey, now, grouped }: { list: Session[]; activ
     <>
       {runs.map((r) =>
         r.group ? (
-          <TabGroup key={r.group.id} group={r.group} title={r.title ?? ""} rows={r.rows} activeKey={activeKey} now={now} grouped={grouped} front={r.group.id === activeGroup && view === "sessions"} />
+          <TabGroup key={r.group.id} group={r.group} title={r.title ?? ""} rows={r.rows} activeKey={activeKey} grouped={grouped} front={r.group.id === activeGroup && view === "sessions"} />
         ) : (
-          <SessionRow key={keyOf(r.rows[0])} s={r.rows[0]} activeKey={activeKey} now={now} grouped={grouped} />
+          <SessionRow key={keyOf(r.rows[0])} s={r.rows[0]} activeKey={activeKey} grouped={grouped} />
         ),
       )}
     </>
@@ -853,7 +908,7 @@ function SessionRows({ list, activeKey, now, grouped }: { list: Session[]; activ
  * there, right-click is the tab's menu, the chevron folds it (folded, it still says what
  * needs you), and a session dropped on it joins the split.
  */
-function TabGroup({ group: g, title, rows, activeKey, now, grouped, front }: { group: Group; title: string; rows: Session[]; activeKey: string; now: number; grouped?: boolean; front: boolean }) {
+function TabGroup({ group: g, title, rows, activeKey, grouped, front }: { group: Group; title: string; rows: Session[]; activeKey: string; grouped?: boolean; front: boolean }) {
   const tabs = useStore((x) => x.tabs);
   const sessions = useStore((x) => x.sessions.sessions);
   const home = useStore((x) => x.info?.home);
@@ -954,7 +1009,7 @@ function TabGroup({ group: g, title, rows, activeKey, now, grouped, front }: { g
               <div key={keyOf(s)} className="relative pl-[10px]">
                 <span className={cx("pointer-events-none absolute top-0 left-0 z-[1] h-[13px] w-[15px] rounded-bl-[8px] border-b border-l", line)} />
                 {i < rows.length - 1 && <span className={cx("pointer-events-none absolute top-[6px] bottom-0 left-0 border-l", line)} />}
-                <SessionRow s={s} activeKey={activeKey} now={now} grouped={grouped} where={!shared} />
+                <SessionRow s={s} activeKey={activeKey} grouped={grouped} where={!shared} />
               </div>
             );
           })}
@@ -1001,11 +1056,12 @@ function LayoutMap({ layout, focus, tone, front }: { layout: Layout; focus: stri
   );
 }
 
-function SessionRow({ s, activeKey, now, grouped, where = true }: { s: Session; activeKey: string; now: number; grouped?: boolean; where?: boolean }) {
+// A row draws again only when its own session or its place changes, not on every poll.
+const SessionRow = memo(function SessionRow({ s, activeKey, grouped, where = true }: { s: Session; activeKey: string; grouped?: boolean; where?: boolean }) {
   const view = useStore((x) => x.view);
   const meta = useStore((x) => x.meta[sessionMetaKey(s.machine, s.name)]);
   const home = useStore((x) => x.info?.home);
-  const shortcut = useStore((x) => tabShortcut(x, s));
+  const shortcut = useStore((x) => tabShortcuts(x).get(keyOf(s)) ?? "");
   const active = activeKey === `${s.machine}/${s.name}` && view === "sessions";
   const { picked, click } = useContext(PickContext);
   const isPicked = picked.has(keyOf(s));
@@ -1017,7 +1073,6 @@ function SessionRow({ s, activeKey, now, grouped, where = true }: { s: Session; 
   // The folder is on every row, in a tab's group too; the branch the group shares is left off.
   const folder = own;
   const branchShown = where && !mainBranch(s.branch);
-  const when = ago(new Date(sessionTime(s) || now).toISOString(), now);
   const state = grouped ? "" : b === "waiting" ? "needs you" : b === "working" ? "working" : b === "done" ? "ended" : "";
   const dot = <span className="opacity-50">·</span>;
   return (
@@ -1077,14 +1132,16 @@ function SessionRow({ s, activeKey, now, grouped, where = true }: { s: Session; 
           {!state && (
             <>
               {(folder || branchShown) && dot}
-              <span className="shrink-0 tabular-nums">{when}</span>
+              <span className="shrink-0 tabular-nums">
+                <Ago t={sessionTime(s)} />
+              </span>
             </>
           )}
         </span>
       </span>
     </button>
   );
-}
+});
 
 /** The agents to start on a device, under the button that asked. */
 function agentMenu(e: React.MouseEvent<HTMLElement>, machine: string) {
@@ -1094,7 +1151,7 @@ function agentMenu(e: React.MouseEvent<HTMLElement>, machine: string) {
 }
 
 /** This computer: a click opens a terminal here; its running sessions are listed like a machine's. */
-function LocalGroup({ sessions, activeKey, now }: { sessions: Session[]; activeKey: string; now: number }) {
+function LocalGroup({ sessions, activeKey }: { sessions: Session[]; activeKey: string }) {
   const view = useStore((s) => s.view);
   const [open, setOpen] = useState(true);
   const needs = sessions.filter((s) => hasAgent(s) && s.state === "waiting").length;
@@ -1131,7 +1188,7 @@ function LocalGroup({ sessions, activeKey, now }: { sessions: Session[]; activeK
           </>
         }
       />
-      {open && <SessionRows list={sessions} activeKey={activeKey} now={now} />}
+      {open && <SessionRows list={sessions} activeKey={activeKey} />}
     </div>
   );
 }
