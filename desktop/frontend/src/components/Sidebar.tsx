@@ -866,7 +866,6 @@ function TabGroup({ group: g, title, rows, activeKey, now, grouped, front }: { g
   const folders = new Set(rows.map((s) => folderName(tildePath(s.path, s.machine === LOCAL ? home : undefined))));
   const branches = new Set(rows.map((s) => s.branch ?? ""));
   const folder = folders.size === 1 ? [...folders][0] : "";
-  const branch = branches.size === 1 ? [...branches][0] : "";
   const shared = folders.size === 1 && branches.size === 1;
   // The heading is the folder the tab works in (the focused pane's, when they differ).
   const focusSession = sessionFor(tabs.find((t) => t.key === g.focus), sessions) ?? rows[0];
@@ -913,12 +912,6 @@ function TabGroup({ group: g, title, rows, activeKey, now, grouped, front }: { g
         </span>
         <span className="flex min-w-0 flex-1 items-center gap-1.5 text-[11.5px]">
           <span className={cx("min-w-0 truncate font-medium", front ? "text-fg" : "text-muted group-hover/tab:text-fg")}>{name}</span>
-          {shared && !mainBranch(branch) && (
-            <span className="flex min-w-0 shrink items-center gap-[2px] text-[11px] text-subtle">
-              <GitBranch size={9.5} className="shrink-0 opacity-80" />
-              <span className="truncate">{branch}</span>
-            </span>
-          )}
           <button
             onClick={(e) => {
               e.stopPropagation();
