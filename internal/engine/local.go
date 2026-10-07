@@ -193,12 +193,19 @@ func (e *Engine) LocalSessions(ctx context.Context) ([]Session, error) {
 		}
 	}
 	sessions := parseSessions(LocalMachine, list.String())
+	for i := 0; i < len(sessions); i++ {
+		if sessions[i].Name == watchSession { // the watcher's own (see WatchLocal): never shown
+			sessions = append(sessions[:i], sessions[i+1:]...)
+			break
+		}
+	}
 	if len(sessions) == 0 {
 		if strings.TrimSpace(list.String()) != "" {
 			// Lines that don't read as sessions mean the listing broke (as when tmux once
 			// printed tabs as "_"): say so rather than show no sessions.
-			first, _, _ := strings.Cut(list.String(), "\n")
-			return nil, fmt.Errorf("tmux listed sessions that can't be read (%.80q)", first)
+			if first, _, _ := strings.Cut(list.String(), "\n"); !strings.HasPrefix(first, watchSession+"\t") || strings.Count(list.String(), "\n") > 1 {
+				return nil, fmt.Errorf("tmux listed sessions that can't be read (%.80q)", first)
+			}
 		}
 		return sessions, nil
 	}

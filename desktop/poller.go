@@ -48,6 +48,9 @@ type poller struct {
 	remoteSince atomic.Int64
 	localSince  atomic.Int64
 	anchored    atomic.Bool // the sessions here answer to this app for folder access
+	watching    atomic.Bool // tmux tells this window about changes here (see watchLocal)
+	nudged      atomic.Bool // a refresh asked for by tmux is waiting to run
+	lastLocal   atomic.Int64
 }
 
 // begin starts a refresh unless one is already running, and reports whether it did. One
@@ -124,7 +127,12 @@ func (p *poller) run(ctx context.Context) {
 			}
 		case <-localTick.C:
 			if p.primary() {
-				go p.refreshLocal(ctx)
+				p.watchLocal(ctx)
+				// tmux says when something changes (watchLocal); this look catches what it
+				// can't see, like Claude's own record of being busy.
+				if time.Since(time.Unix(0, p.lastLocal.Load())) > 2500*time.Millisecond {
+					go p.refreshLocal(ctx)
+				}
 			}
 		case <-shareTick.C:
 			if !p.primary() {
@@ -187,6 +195,28 @@ func (p *poller) current() SessionsView {
 	return p.last
 }
 
+// watchLocal has tmux report changes to this computer's sessions as they happen (the window
+// that polls only, once): the list is looked at again right away, at most every 0.7s.
+func (p *poller) watchLocal(ctx context.Context) {
+	if !p.watching.CompareAndSwap(false, true) {
+		return
+	}
+	go engine.WatchLocal(ctx, func() {
+		if !p.nudged.CompareAndSwap(false, true) {
+			return // one is on its way
+		}
+		go func() {
+			defer p.nudged.Store(false)
+			wait := 150 * time.Millisecond // let a burst of changes settle
+			if since := time.Since(time.Unix(0, p.lastLocal.Load())); since < 700*time.Millisecond {
+				wait = 700*time.Millisecond - since
+			}
+			time.Sleep(wait)
+			p.refreshLocal(ctx)
+		}()
+	})
+}
+
 // refreshLocal lists the sessions on this computer. It is cheap (no network), so it runs
 // often: a local pane's folder, title and Claude state follow within a couple of seconds.
 // When the list can't be read, the sessions last seen stay (marked stale) and the reason is
@@ -197,6 +227,7 @@ func (p *poller) refreshLocal(ctx context.Context) {
 		return
 	}
 	defer end(&p.localSince, started)
+	p.lastLocal.Store(time.Now().UnixNano())
 	if !p.anchored.Load() {
 		p.anchored.Store(engine.AnchorLocalSessions(ctx, ownProgram()))
 	}

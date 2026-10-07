@@ -29,16 +29,7 @@ func localScreens(ctx context.Context, sessions []string) map[string]string {
 	out, _, _ := localTmuxRun(ctx, args...) // a session gone meanwhile leaves the rest unread
 	for _, chunk := range strings.Split(out, mark)[1:] {
 		name, body, _ := strings.Cut(chunk, "\n")
-		var keep []string
-		for _, line := range strings.Split(body, "\n") {
-			if strings.TrimSpace(line) != "" {
-				keep = append(keep, line)
-			}
-		}
-		if len(keep) > 30 {
-			keep = keep[len(keep)-30:]
-		}
-		screens[strings.TrimSpace(name)] = strings.Join(keep, "\n")
+		screens[strings.TrimSpace(name)] = screenTail(body, 30)
 	}
 	return screens
 }

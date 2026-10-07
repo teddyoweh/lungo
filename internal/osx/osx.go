@@ -20,6 +20,17 @@ import (
 	"skybuild/internal/paths"
 )
 
+// Start runs a command without waiting for it, and collects it when it ends: a command
+// started and never waited for stays in the process table (a zombie) for as long as the
+// app runs.
+func Start(cmd *exec.Cmd) error {
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	go cmd.Wait()
+	return nil
+}
+
 // Result of a finished command.
 type Result struct {
 	Stdout string
@@ -257,11 +268,11 @@ func fixPath(limit time.Duration) bool {
 func OpenURL(url string) error {
 	switch runtime.GOOS {
 	case "darwin":
-		return exec.Command("open", url).Start()
+		return Start(exec.Command("open", url))
 	case "windows":
-		return exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
+		return Start(exec.Command("rundll32", "url.dll,FileProtocolHandler", url))
 	default:
-		return exec.Command("xdg-open", url).Start()
+		return Start(exec.Command("xdg-open", url))
 	}
 }
 
@@ -270,22 +281,22 @@ func OpenURL(url string) error {
 func RevealFile(path string) error {
 	switch runtime.GOOS {
 	case "darwin":
-		return exec.Command("open", "-R", path).Start()
+		return Start(exec.Command("open", "-R", path))
 	case "windows":
-		return exec.Command("explorer", "/select,", path).Start()
+		return Start(exec.Command("explorer", "/select,", path))
 	default:
-		return exec.Command("xdg-open", filepath.Dir(path)).Start()
+		return Start(exec.Command("xdg-open", filepath.Dir(path)))
 	}
 }
 
 func Reveal(path string) error {
 	switch runtime.GOOS {
 	case "darwin":
-		return exec.Command("open", path).Start()
+		return Start(exec.Command("open", path))
 	case "windows":
-		return exec.Command("explorer", path).Start()
+		return Start(exec.Command("explorer", path))
 	default:
-		return exec.Command("xdg-open", path).Start()
+		return Start(exec.Command("xdg-open", path))
 	}
 }
 
@@ -342,11 +353,11 @@ func OpenTerminal(pref, command string) error {
 		esc := strings.ReplaceAll(strings.ReplaceAll(command, `\`, `\\`), `"`, `\"`)
 		switch pref {
 		case "Ghostty":
-			return exec.Command("open", "-na", "Ghostty", "--args", "-e", "/bin/zsh", "-lc", command).Start()
+			return Start(exec.Command("open", "-na", "Ghostty", "--args", "-e", "/bin/zsh", "-lc", command))
 		case "iTerm":
-			return exec.Command("osascript",
+			return Start(exec.Command("osascript",
 				"-e", `tell application "iTerm" to create window with default profile command "`+esc+`"`,
-				"-e", `tell application "iTerm" to activate`).Start()
+				"-e", `tell application "iTerm" to activate`))
 		case "Warp":
 			// Warp runs commands through launch configurations: write one and open it by URL.
 			// The command also goes on the clipboard in case Warp ignores the URL.
@@ -356,28 +367,28 @@ func OpenTerminal(pref, command string) error {
 			yaml := fmt.Sprintf("---\nname: skybuild\nwindows:\n  - tabs:\n      - title: %q\n        layout:\n          cwd: %q\n          commands:\n            - exec: %q\n",
 				command, paths.Home(), command)
 			if os.MkdirAll(dir, 0o755) == nil && os.WriteFile(filepath.Join(dir, name), []byte(yaml), 0o644) == nil {
-				return exec.Command("open", "warp://launch/"+name).Start()
+				return Start(exec.Command("open", "warp://launch/"+name))
 			}
-			return exec.Command("open", "-a", "Warp").Start()
+			return Start(exec.Command("open", "-a", "Warp"))
 		default:
-			return exec.Command("osascript",
+			return Start(exec.Command("osascript",
 				"-e", `tell application "Terminal" to do script "`+esc+`"`,
-				"-e", `tell application "Terminal" to activate`).Start()
+				"-e", `tell application "Terminal" to activate`))
 		}
 	case "windows":
 		args := strings.Fields(command)
 		if pref == "Windows Terminal" && Has("wt") {
-			return exec.Command(Which("wt"), args...).Start()
+			return Start(exec.Command(Which("wt"), args...))
 		}
-		return exec.Command("cmd", append([]string{"/c", "start", ""}, args...)...).Start()
+		return Start(exec.Command("cmd", append([]string{"/c", "start", ""}, args...)...))
 	default:
 		switch pref {
 		case "gnome-terminal":
-			return exec.Command("gnome-terminal", "--", "sh", "-c", command).Start()
+			return Start(exec.Command("gnome-terminal", "--", "sh", "-c", command))
 		case "":
 			return errors.New("no terminal app found")
 		default:
-			return exec.Command(pref, "-e", "sh", "-c", command).Start()
+			return Start(exec.Command(pref, "-e", "sh", "-c", command))
 		}
 	}
 }

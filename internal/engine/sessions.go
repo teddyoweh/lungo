@@ -63,9 +63,58 @@ type Session struct {
 // Key identifies a session across machines.
 func (s Session) Key() string { return s.Machine + "/" + s.Name }
 
-// listSessionsCmd prints the sessions, then each Claude state file, then the bottom of each
-// Claude pane (hooks don't fire for every prompt Claude can stop at, the screen tells us).
-const listSessionsCmd = `echo "@@sky-login@@ $(date +%s) $(stat -c %Y ~/.claude/.oauth-token 2>/dev/null || stat -f %m ~/.claude/.oauth-token 2>/dev/null)"; tmux list-sessions -F '#{session_name}	#{session_created}	#{window_activity}	#{session_attached}	#{session_windows}	#{pane_current_path}	#{pane_current_command}	#{host_short}	#{pane_title}	#{?mouse_any_flag,m,}#{?alternate_on,a,}#{?@sky-keys,k,}' 2>/dev/null; ` + branchesCmd + ` echo '@@sky-status@@'; find ~/.skybuild/status -name '*.json' -exec cat {} + 2>/dev/null; P=$(ps -A -o pid=,ppid=,etime=,args= 2>/dev/null); tmux list-panes -a -F '#{session_name}	#{pane_current_command}	#{pane_pid}' 2>/dev/null | while IFS='	' read -r s c p; do case "$c" in *claude*|node|[0-9]*.[0-9]*.[0-9]*) c=$(printf '%s\n' "$P" | awk -v p="$p" '$2==p' | grep -m1 -E 'claude|codex|grok|mantis'); r=~/.claude/sessions/$(printf '%s' "$c" | awk '{print $1}').json; echo "@@sky-pane@@$s	$c	$(sed -n 's/.*"sessionId" *: *"\([^"]*\)".*/\1/p' "$r" 2>/dev/null | head -1) $(sed -n 's/.*"status" *: *"\([a-z]*\)".*/\1/p' "$r" 2>/dev/null | head -1)"; tmux capture-pane -p -t "$s" 2>/dev/null | grep -v '^[[:space:]]*$' | tail -30;; codex*|grok*|mantis*|python*|Python*) c=$(printf '%s\n' "$P" | awk -v p="$p" '$2==p' | grep -m1 -E 'codex|grok|mantis'); [ -n "$c" ] && { echo "@@sky-pane@@$s	$c	"; tmux capture-pane -p -t "$s" 2>/dev/null | grep -v '^[[:space:]]*$' | tail -30; };; esac; done; true`
+// listSessionsCmd prints the sessions, then each Claude state file, then for each pane an
+// agent runs in: the agent's process and Claude's own record of it, and the pane's screen
+// (hooks don't fire for every prompt Claude can stop at; the screen tells us). It costs the
+// machine about six processes however many panes there are: one awk pass matches panes to
+// processes and reads the records, one tmux call captures every screen (it used to be a dozen
+// processes per pane, every five seconds). It runs in the machine's login shell, zsh as
+// often as sh or bash: the names are split by a command substitution, which all three split
+// alike (zsh doesn't split a plain $N).
+const listSessionsCmd = `echo "@@sky-login@@ $(date +%s) $(stat -c %Y ~/.claude/.oauth-token 2>/dev/null || stat -f %m ~/.claude/.oauth-token 2>/dev/null)"; tmux list-sessions -F '#{session_name}	#{session_created}	#{window_activity}	#{session_attached}	#{session_windows}	#{pane_current_path}	#{pane_current_command}	#{host_short}	#{pane_title}	#{?mouse_any_flag,m,}#{?alternate_on,a,}#{?@sky-keys,k,}' 2>/dev/null; ` + branchesCmd + ` echo '@@sky-status@@'; find ~/.skybuild/status -name '*.json' -exec cat {} + 2>/dev/null; P=$(ps -A -o pid=,ppid=,etime=,args= 2>/dev/null); L=$(tmux list-panes -a -F '#{session_name}	#{pane_current_command}	#{pane_pid}' 2>/dev/null); H=$(printf '%s\n@@ps@@\n%s\n' "$L" "$P" | awk -v home="$HOME" '` + agentPanesAwk + `'); N=${H##*@@sky-cap@@}; printf '%s' "${H%@@sky-cap@@*}"; set --; for s in $(echo "$N"); do [ $# -gt 0 ] && set -- "$@" ';'; set -- "$@" display-message -p -t "=$s:" '@@sky-screen@@#{session_name}' ';' capture-pane -p -t "=$s:"; done; echo '@@sky-screens@@'; [ $# -gt 0 ] && tmux "$@" 2>/dev/null; true`
+
+// agentPanesAwk reads the panes (session, command in front, shell pid), then "@@ps@@" and
+// the process table, and prints a "@@sky-pane@@session<TAB>process<TAB>conversation status"
+// line for each pane an agent runs in, then "@@sky-cap@@" and the names of those sessions.
+// A pane whose command looks like Claude (by name, node, or a version-named binary) is
+// listed even when its process isn't found; another agent's only when it is.
+const agentPanesAwk = `BEGIN { sec = 1 }
+$0 == "@@ps@@" { sec = 2; next }
+sec == 1 {
+  if (split($0, a, "\t") < 3) next
+  c = a[2]
+  if (c ~ /claude/ || c == "node" || c ~ /^[0-9][^.]*[.][^.]*[.]/) k = "c"
+  else if (c ~ /^(codex|grok|mantis|python|Python)/) k = "o"
+  else next
+  n++; name[n] = a[1]; kind[n] = k; at[a[3]] = n
+  next
+}
+sec == 2 {
+  if (split($0, f, " ") < 4 || !(f[2] in at)) next
+  i = at[f[2]]
+  if (i in found) next
+  if ((kind[i] == "c" && $0 ~ /claude|codex|grok|mantis/) || (kind[i] == "o" && $0 ~ /codex|grok|mantis/)) found[i] = $0
+}
+END {
+  caps = ""
+  for (i = 1; i <= n; i++) {
+    if (kind[i] == "o" && !(i in found)) continue
+    sid = ""; st = ""
+    if (kind[i] == "c" && (i in found)) {
+      split(found[i], f, " ")
+      rec = home "/.claude/sessions/" f[1] ".json"
+      while ((getline l < rec) > 0) {
+        if (sid == "" && match(l, /"sessionId"[ ]*:[ ]*"[^"]*"/)) { sid = substr(l, RSTART, RLENGTH); sub(/^"sessionId"[ ]*:[ ]*"/, "", sid); sub(/"$/, "", sid) }
+        if (st == "" && match(l, /"status"[ ]*:[ ]*"[a-z]*"/)) { st = substr(l, RSTART, RLENGTH); sub(/^"status"[ ]*:[ ]*"/, "", st); sub(/"$/, "", st) }
+      }
+      close(rec)
+    }
+    if (kind[i] == "c") printf "@@sky-pane@@%s\t%s\t%s %s\n", name[i], found[i], sid, st
+    else printf "@@sky-pane@@%s\t%s\t\n", name[i], found[i]
+    caps = caps " " name[i]
+  }
+  printf "@@sky-cap@@%s", caps
+}`
 
 // branchesCmd prints the branch of each folder a session is in (one look per folder; reading
 // HEAD is all it takes). Folders outside a repository print nothing.
@@ -113,6 +162,16 @@ func parseSessions(machine, out string) []Session {
 		}
 	}
 	status, panesRaw, _ := strings.Cut(status, "@@sky-pane@@")
+	// The screens come after the panes, one "@@sky-screen@@session" chunk each (as captured:
+	// the blank lines are dropped here, and the last 30 kept).
+	panesRaw, screensRaw, hasScreens := strings.Cut(panesRaw, "@@sky-screens@@")
+	screens := map[string]string{}
+	if hasScreens {
+		for _, chunk := range strings.Split(screensRaw, "@@sky-screen@@")[1:] {
+			name, body, _ := strings.Cut(chunk, "\n")
+			screens[strings.TrimSpace(name)] = screenTail(body, 30)
+		}
+	}
 	panes := map[string]string{}
 	flags := map[string]string{}
 	running := map[string]int64{}    // session → seconds its Claude has been running
@@ -127,6 +186,9 @@ func parseSessions(machine, out string) []Session {
 				args, rec, _ := strings.Cut(rest, "\t")
 				name = strings.TrimSpace(name)
 				panes[name] = body
+				if hasScreens {
+					panes[name] = screens[name]
+				}
 				if f := strings.Fields(args); len(f) >= 4 {
 					agents[name] = agentOfArgs(strings.Join(f[3:], " ")) // after pid, parent, age
 				}
@@ -648,13 +710,24 @@ func termControl(t sshx.Target, op string) error {
 
 var termWarm = struct {
 	sync.Mutex
-	at   map[string]time.Time // machine → when its connection was last seen up
-	busy map[string]bool
-}{at: map[string]time.Time{}, busy: map[string]bool{}}
+	at   map[string]time.Time     // machine → when its connection was last seen up
+	busy map[string]chan struct{} // machine → closed once the look under way is done
+}{at: map[string]time.Time{}, busy: map[string]chan struct{}{}}
 
 // WarmTerminals makes sure the machine's terminal connection is up, so the next pane on it
 // opens right away. Cheap to call often: it looks at most every 15 seconds.
 func (e *Engine) WarmTerminals(ctx context.Context, machine string) {
+	e.warmTerminals(ctx, machine, false)
+}
+
+// ReadyTerminals is WarmTerminals that waits for the connection before a pane opens. Panes
+// opening together (twenty of them after a restart) then share one connection instead of
+// each making its own at once, which sshd answers by turning some away (MaxStartups).
+func (e *Engine) ReadyTerminals(ctx context.Context, machine string) {
+	e.warmTerminals(ctx, machine, true)
+}
+
+func (e *Engine) warmTerminals(ctx context.Context, machine string, wait bool) {
 	if termSocket() == "" {
 		return
 	}
@@ -663,12 +736,24 @@ func (e *Engine) WarmTerminals(ctx context.Context, machine string) {
 		return
 	}
 	termWarm.Lock()
-	if termWarm.busy[machine] || time.Since(termWarm.at[machine]) < 15*time.Second {
+	if time.Since(termWarm.at[machine]) < 15*time.Second {
 		termWarm.Unlock()
 		return
 	}
-	termWarm.busy[machine] = true
+	if ch, busy := termWarm.busy[machine]; busy {
+		termWarm.Unlock()
+		if wait {
+			select {
+			case <-ch:
+			case <-ctx.Done():
+			}
+		}
+		return
+	}
+	done := make(chan struct{})
+	termWarm.busy[machine] = done
 	termWarm.Unlock()
+	defer close(done)
 	t := e.Target(m)
 	up := termControl(t, "check") == nil
 	if !up {
@@ -848,4 +933,18 @@ func (e *Engine) ReapShells(ctx context.Context, keep map[string][]string) {
 		_, _ = sshx.Run(c, e.Target(m), script(m.Name))
 		cancel()
 	}
+}
+
+// screenTail is the last n lines of a screen that aren't blank.
+func screenTail(screen string, n int) string {
+	var keep []string
+	for _, line := range strings.Split(screen, "\n") {
+		if strings.TrimSpace(line) != "" {
+			keep = append(keep, line)
+		}
+	}
+	if len(keep) > n {
+		keep = keep[len(keep)-n:]
+	}
+	return strings.Join(keep, "\n")
 }

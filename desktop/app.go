@@ -984,6 +984,12 @@ func (a *App) OpenSessionTerminal(machine, session string, o engine.AttachOption
 	spec := term.Spec{Args: args, Title: title, Cols: cols, Rows: rows}
 	if local {
 		spec.Dir = paths.Home()
+	} else {
+		// The machine's one shared connection first (made once, however many panes ask at
+		// the same moment); the pane's ssh then rides on it instead of making its own.
+		rc, cancel := context.WithTimeout(a.ctx, 8*time.Second)
+		a.eng.ReadyTerminals(rc, machine)
+		cancel()
 	}
 	info, err := a.terms.Start(spec)
 	if !local {

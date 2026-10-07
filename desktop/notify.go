@@ -6,6 +6,8 @@ import (
 	"strconv"
 
 	"github.com/gen2brain/beeep"
+
+	"skybuild/internal/osx"
 )
 
 // notify shows a native notification. On macOS osascript is used directly: it needs no
@@ -13,7 +15,7 @@ import (
 func notify(title, body string) {
 	if runtime.GOOS == "darwin" {
 		script := "display notification " + strconv.Quote(body) + " with title " + strconv.Quote(title) + ` sound name "Glass"`
-		_ = exec.Command("osascript", "-e", script).Start()
+		_ = osx.Start(exec.Command("osascript", "-e", script)) // collected when it ends
 		return
 	}
 	_ = beeep.Notify(title, body, "")
