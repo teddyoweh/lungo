@@ -1405,8 +1405,8 @@ export async function initWindow() {
     // to the user's real sessions from a window nobody sees.
     dormant = !!win.headless && isNativeWebview();
     clearForgotten(win.forgotten ?? []);
-    opening = dormant ? "" : await api.windowLayout().catch(() => "");
-    const tmux = await api.localTmux().catch(() => null);
+    const [layout, tmux] = await Promise.all([dormant ? "" : api.windowLayout().catch(() => ""), api.localTmux().catch(() => null)]);
+    opening = layout;
     const ws = readPref("workspace", false);
     setState({ win, zoom, sidebar: readPref("sidebar") !== "0", winReady: true, welcome: !dormant && windowId === MAIN && readPref(WELCOMED) === null, localTmux: !!tmux?.installed, workspace: ws && state.workspaces.includes(ws) ? ws : null });
   } catch {

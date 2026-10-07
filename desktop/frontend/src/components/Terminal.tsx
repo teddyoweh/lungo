@@ -266,6 +266,7 @@ export const TerminalView = memo(function TerminalView({ tab, active, focused }:
   const gl = useRef<WebglAddon | null>(null);
   const lost = useRef(0); // GPU renderers this pane lost, to give up after a few
   const dirty = useRef(false); // the screen changed since it was last kept
+  const showView = useRef<() => void>(() => {}); // lays the terminal out in its pane, once
   const ws = useRef<WebSocket | null>(null);
   const opening = useRef(false);
   const everConnected = useRef(false);
@@ -302,7 +303,9 @@ export const TerminalView = memo(function TerminalView({ tab, active, focused }:
       cursorStyle: getState().term.cursor,
       cursorInactiveStyle: "outline",
       allowProposedApi: true,
-      scrollback: 20000,
+      // A session pane draws tmux's screen, and tmux keeps the history; a plain shell keeps
+      // its own.
+      scrollback: persistent(tab) ? 2000 : 20000,
       // The room kept on the right for xterm's scrollbar. A session in tmux scrolls inside
       // tmux and never shows one, so it gets the full width.
       overviewRuler: { width: persistent(tab) ? 1 : 8 },
@@ -466,18 +469,27 @@ export const TerminalView = memo(function TerminalView({ tab, active, focused }:
       };
     };
     let disposed = false;
-    fontsReady.then(() => {
-      if (disposed || !host.current) return;
+    let laidOut = false;
+    // The terminal laid out in its pane, with what this session showed last time until the
+    // live screen arrives (unless that has come already).
+    const show = () => {
+      if (laidOut || disposed || !host.current) return;
+      laidOut = true;
       t.open(host.current);
       takeMouse();
-      // What this session showed last time, until the live screen arrives.
-      const snap = !tabRef.current.url && readSnap(tabRef.current);
+      const snap = !tabRef.current.url && !dirty.current && readSnap(tabRef.current);
       if (snap) {
         t.write(snap.data);
         setSeen(true);
       }
+    };
+    showView.current = show;
+    fontsReady.then(() => {
+      if (disposed || !host.current) return;
       if (!activeRef.current) {
-        // A pane in a background tab: connect in its turn, at the size it will have.
+        // A pane in a background tab: laid out in its turn, so the tab on screen comes first,
+        // then connected in its turn, at the size it will have.
+        eagerly(show);
         eagerly(() => {
           if (disposed || activeRef.current || tabRef.current.termId || tabRef.current.error || opening.current) return;
           const size = hiddenSize();
@@ -490,6 +502,7 @@ export const TerminalView = memo(function TerminalView({ tab, active, focused }:
         });
         return;
       }
+      show();
       setGPU(true);
       safeFit();
       openBackend();
@@ -717,7 +730,10 @@ export const TerminalView = memo(function TerminalView({ tab, active, focused }:
   // Open the backend when the pane is first shown, and again whenever it let go of its
   // terminal to attach afresh (the connection dropped, the computer woke up).
   useEffect(() => {
-    if (tab.termId || tab.error || !term.current?.element) return;
+    if (active) showView.current();
+    // A pane on screen connects once it is laid out (at its size); one in the background may
+    // connect again before that.
+    if (tab.termId || tab.error || !term.current || (active && !term.current.element)) return;
     if (!active && !tab.retry && !everConnected.current) return; // a background pane's first connection waits its turn
     const timer = window.setTimeout(
       () => {
@@ -965,6 +981,7 @@ export const TerminalView = memo(function TerminalView({ tab, active, focused }:
   // stays while the pane is among the most recently shown. Focused: take the keyboard.
   useEffect(() => {
     if (!active) return;
+    showView.current();
     lost.current = 0;
     setGPU(true);
     const id = requestAnimationFrame(() => {
