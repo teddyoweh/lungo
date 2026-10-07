@@ -290,6 +290,10 @@ export function Ports(arg1) {
   return window['go']['main']['App']['Ports'](arg1);
 }
 
+export function Prefs() {
+  return window['go']['main']['App']['Prefs']();
+}
+
 export function ProjectAdd(arg1) {
   return window['go']['main']['App']['ProjectAdd'](arg1);
 }
@@ -480,6 +484,10 @@ export function SetLinkWatch(arg1, arg2) {
 
 export function SetOpenAtLogin(arg1) {
   return window['go']['main']['App']['SetOpenAtLogin'](arg1);
+}
+
+export function SetPrefs(arg1) {
+  return window['go']['main']['App']['SetPrefs'](arg1);
 }
 
 export function SetSyncItems(arg1, arg2) {

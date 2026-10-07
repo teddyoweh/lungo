@@ -151,6 +151,8 @@ export function PlanMove(arg1:string,arg2:string,arg3:string):Promise<engine.Mov
 
 export function Ports(arg1:string):Promise<Array<model.Port>>;
 
+export function Prefs():Promise<Record<string, string>>;
+
 export function ProjectAdd(arg1:string):Promise<string>;
 
 export function ProjectBring(arg1:string,arg2:string,arg3:engine.HandoffOptions):Promise<string>;
@@ -246,6 +248,8 @@ export function SetIdle(arg1:string,arg2:number):Promise<string>;
 export function SetLinkWatch(arg1:string,arg2:boolean):Promise<void>;
 
 export function SetOpenAtLogin(arg1:boolean):Promise<void>;
+
+export function SetPrefs(arg1:Record<string, string>):Promise<void>;
 
 export function SetSyncItems(arg1:string,arg2:Array<string>):Promise<void>;
 
