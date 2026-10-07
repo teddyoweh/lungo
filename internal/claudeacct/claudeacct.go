@@ -110,7 +110,7 @@ func Forget(id string) {
 	all := Load()
 	delete(all, id)
 	b, _ := json.MarshalIndent(all, "", "  ")
-	_ = os.WriteFile(statePath(), b, 0o600)
+	_, _ = paths.WriteFile(statePath(), b, 0o600)
 }
 
 type rateEvent struct {

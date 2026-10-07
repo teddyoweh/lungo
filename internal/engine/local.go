@@ -17,6 +17,7 @@ import (
 	"skybuild/internal/bootstrap"
 	"skybuild/internal/osx"
 	"skybuild/internal/paths"
+	"skybuild/internal/proc"
 	"skybuild/internal/sshx"
 )
 
@@ -140,32 +141,72 @@ func (e *Engine) LocalAttachArgs(session string, o AttachOptions) ([]string, err
 	return []string{"/bin/sh", "-c", pre + attachScriptWith("tmux", session, o)}, nil
 }
 
-const localListCmd = `tmux list-sessions -F '#{session_name}	#{session_created}	#{window_activity}	#{session_attached}	#{session_windows}	#{pane_current_path}	#{pane_current_command}	#{host_short}	#{pane_title}	#{?mouse_any_flag,m,}#{?alternate_on,a,}#{?@sky-keys,k,}' 2>/dev/null; %s echo '@@sky-panes@@'; tmux list-panes -a -F '#{session_name}	#{pane_pid}	#{window_active}#{pane_active}' 2>/dev/null; true`
+// localListFormat is a session's line, as parseSessions reads it.
+const localListFormat = "#{session_name}\t#{session_created}\t#{window_activity}\t#{session_attached}\t#{session_windows}\t#{pane_current_path}\t#{pane_current_command}\t#{host_short}\t#{pane_title}\t#{?mouse_any_flag,m,}#{?alternate_on,a,}#{?@sky-keys,k,}"
+
+// localPaneMark starts a pane's line in the same listing.
+const localPaneMark = "@@p\t"
+
+// localTmuxRun runs tmux on sky's server directly, no shell: several tmux commands in one
+// go are separated by a ";" argument. ok is false when no server is running (no sessions).
+func localTmuxRun(ctx context.Context, args ...string) (out string, ok bool, err error) {
+	tm := LocalTmux()
+	if tm == "" {
+		return "", false, ErrNoLocalTmux
+	}
+	conf, err := localConf()
+	if err != nil {
+		return "", false, err
+	}
+	r, err := osx.Exec(ctx, osx.Cmd{Name: tm, Args: append([]string{"-u", "-L", localSocket(), "-f", conf}, args...), Dir: paths.Home()})
+	if err != nil {
+		if msg := r.Stderr + err.Error(); strings.Contains(msg, "no server running") || strings.Contains(msg, "error connecting to") {
+			return "", false, nil
+		}
+		return r.Stdout, true, err
+	}
+	return r.Stdout, true, nil
+}
 
 // LocalSessions lists the sessions on this computer. Claude's state comes from Claude Code's
 // own record of its running sessions (no hooks are installed here) and from the screen.
+// It costs two tmux calls and no shell: the processes, branches and screens are read here.
 func (e *Engine) LocalSessions(ctx context.Context) ([]Session, error) {
 	if LocalTmux() == "" {
 		return nil, nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, 6*time.Second)
 	defer cancel()
-	// Branches only where git can be run without side effects (see localGit).
-	git := ""
-	if localGit() {
-		git = branchesCmd
-	}
-	out, err := localSh(ctx, fmt.Sprintf(localListCmd, git))
+	out, running, err := localTmuxRun(ctx, "list-sessions", "-F", localListFormat, ";", "list-panes", "-a", "-F", localPaneMark+"#{session_name}\t#{pane_pid}\t#{window_active}#{pane_active}")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("tmux: %w", err)
 	}
-	list, panesRaw, _ := strings.Cut(out, "@@sky-panes@@")
-	sessions := parseSessions(LocalMachine, list)
+	if !running {
+		return []Session{}, nil
+	}
+	var list, panesRaw strings.Builder
+	for _, line := range strings.Split(out, "\n") {
+		if rest, ok := strings.CutPrefix(line, localPaneMark); ok {
+			panesRaw.WriteString(rest + "\n")
+		} else if line != "" {
+			list.WriteString(line + "\n")
+		}
+	}
+	sessions := parseSessions(LocalMachine, list.String())
 	if len(sessions) == 0 {
+		if strings.TrimSpace(list.String()) != "" {
+			// Lines that don't read as sessions mean the listing broke (as when tmux once
+			// printed tabs as "_"): say so rather than show no sessions.
+			first, _, _ := strings.Cut(list.String(), "\n")
+			return nil, fmt.Errorf("tmux listed sessions that can't be read (%.80q)", first)
+		}
 		return sessions, nil
 	}
+	for i := range sessions {
+		sessions[i].Branch = localBranch(sessions[i].Path)
+	}
 	shells := map[string]int{} // session → pid of the shell in its active pane
-	for _, line := range strings.Split(panesRaw, "\n") {
+	for _, line := range strings.Split(panesRaw.String(), "\n") {
 		f := strings.Split(strings.TrimSpace(line), "\t")
 		if len(f) < 3 {
 			continue
@@ -175,7 +216,7 @@ func (e *Engine) LocalSessions(ctx context.Context) ([]Session, error) {
 		}
 	}
 	procs := processTable(ctx)
-	var capture strings.Builder
+	var capture []string // sessions whose screen tells what their agent is doing
 	claudes := map[string]int{}
 	others := map[string]string{} // session → another agent running in it
 	for i := range sessions {
@@ -188,27 +229,20 @@ func (e *Engine) LocalSessions(ctx context.Context) ([]Session, error) {
 				s.Claude, s.Agent, s.Command, s.State = false, a, a, "idle"
 				s.Title = agentTitle(a, s.Title, s.Path)
 				others[s.Name] = a
-				capture.WriteString("echo " + sshx.Quote("@@sky-pane@@"+s.Name) + "; tmux capture-pane -p -t " + sshx.Quote("="+s.Name+":") + " 2>/dev/null | grep -v '^[[:space:]]*$' | tail -30; ")
+				capture = append(capture, s.Name)
 			}
 			continue
 		}
 		s.Agent = "claude"
 		claudes[s.Name] = pid
 		s.Claude, s.Command = true, "claude"
-		s.Flags = ClaudeFlags(procs.args[pid])
-		capture.WriteString("echo " + sshx.Quote("@@sky-pane@@"+s.Name) + "; tmux capture-pane -p -t " + sshx.Quote("="+s.Name+":") + " 2>/dev/null | grep -v '^[[:space:]]*$' | tail -30; ")
+		s.Flags = ClaudeFlags(procs.args(pid))
+		capture = append(capture, s.Name)
 	}
 	if len(claudes) == 0 && len(others) == 0 {
 		return sessions, nil
 	}
-	screens := map[string]string{}
-	if raw, err := localSh(ctx, capture.String()+"true"); err == nil {
-		for _, chunk := range strings.Split(raw, "@@sky-pane@@") {
-			if name, body, ok := strings.Cut(chunk, "\n"); ok {
-				screens[strings.TrimSpace(name)] = body
-			}
-		}
-	}
+	screens := localScreens(ctx, capture)
 	host, _ := os.Hostname()
 	host, _, _ = strings.Cut(host, ".")
 	for i := range sessions {
@@ -279,33 +313,13 @@ func readClaudeRecord(pid int) claudeRecord {
 // sessionID is the shape of a Claude Code conversation ID (it ends up on a command line).
 var sessionID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{7,79}$`)
 
-type procTable struct {
-	args map[int]string
-	kids map[int][]int
-}
+// procTable is every process on this computer (see proc): parents, and command lines read
+// when asked.
+type procTable struct{ *proc.Table }
 
-// processTable reads every process's parent and command line once.
-func processTable(ctx context.Context) procTable {
-	t := procTable{args: map[int]string{}, kids: map[int][]int{}}
-	out, err := exec.CommandContext(ctx, "ps", "-A", "-o", "pid=,ppid=,args=").Output()
-	if err != nil {
-		return t
-	}
-	for _, line := range strings.Split(string(out), "\n") {
-		f := strings.Fields(line)
-		if len(f) < 3 {
-			continue
-		}
-		pid, err1 := strconv.Atoi(f[0])
-		ppid, err2 := strconv.Atoi(f[1])
-		if err1 != nil || err2 != nil {
-			continue
-		}
-		t.args[pid] = strings.Join(f[2:], " ")
-		t.kids[ppid] = append(t.kids[ppid], pid)
-	}
-	return t
-}
+func processTable(ctx context.Context) procTable { return procTable{proc.List(ctx)} }
+
+func (t procTable) args(pid int) string { return t.Args(pid) }
 
 // agentUnder finds another coding agent (Codex, Grok, Mantis) among a shell's descendants
 // and says which; "" when there is none.
@@ -315,13 +329,13 @@ func (t procTable) agentUnder(shell int) string {
 	}
 	var walk func(pid, depth int) string
 	walk = func(pid, depth int) string {
-		if a := agentOfArgs(t.args[pid]); a != "" && a != "claude" {
+		if a := agentOfArgs(t.args(pid)); a != "" && a != "claude" {
 			return a
 		}
 		if depth > 8 {
 			return ""
 		}
-		for _, k := range t.kids[pid] {
+		for _, k := range t.Kids[pid] {
 			if a := walk(k, depth+1); a != "" {
 				return a
 			}
@@ -339,14 +353,14 @@ func (t procTable) claudeUnder(shell int) int {
 	}
 	var walk func(pid, depth int) int
 	walk = func(pid, depth int) int {
-		arg0, _, _ := strings.Cut(t.args[pid], " ")
+		arg0, _, _ := strings.Cut(t.args(pid), " ")
 		if filepath.Base(arg0) == "claude" || strings.Contains(arg0, "/claude/versions/") {
 			return pid
 		}
 		if depth > 8 {
 			return 0
 		}
-		for _, k := range t.kids[pid] {
+		for _, k := range t.Kids[pid] {
 			if p := walk(k, depth+1); p != 0 {
 				return p
 			}

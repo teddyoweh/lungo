@@ -31,6 +31,8 @@ type Engine struct {
 	tsUp        bool
 	tsUserspace bool
 	tsChecked   time.Time
+	tsAsking    bool       // a renewal is under way
+	tsFirst     sync.Mutex // held while the very first answer is fetched
 
 	tunnels *tunnels
 }
@@ -169,17 +171,48 @@ func (e *Engine) SyncSSHConfig() error {
 	return e.writeSSH(all)
 }
 
-// tailscaleUp caches whether this computer is on the tailnet for 30 seconds.
+// tailscaleUp says whether this computer is on the tailnet. The answer is kept for 30
+// seconds, and an old one is renewed in the background: asking Tailscale can take seconds,
+// and every connection to a machine (opening a pane, every poll) asks. Only the very first
+// time, with nothing known yet, waits for the answer.
 func (e *Engine) tailscaleUp() bool {
 	e.tsMu.Lock()
-	defer e.tsMu.Unlock()
-	if time.Since(e.tsChecked) > 30*time.Second {
-		s, err := tailnet.Local(context.Background())
-		e.tsUp = err == nil && s.BackendState == "Running"
-		e.tsUserspace = err == nil && !s.TUN
-		e.tsChecked = time.Now()
+	known, old := !e.tsChecked.IsZero(), time.Since(e.tsChecked) > 30*time.Second
+	if known && old && !e.tsAsking {
+		e.tsAsking = true
+		go func() {
+			e.askTailscale()
+			e.tsMu.Lock()
+			e.tsAsking = false
+			e.tsMu.Unlock()
+		}()
 	}
-	return e.tsUp
+	up := e.tsUp
+	e.tsMu.Unlock()
+	if !known {
+		e.tsFirst.Lock() // one first ask, however many connections wait for it
+		e.tsMu.Lock()
+		asked := !e.tsChecked.IsZero()
+		e.tsMu.Unlock()
+		if !asked {
+			e.askTailscale()
+		}
+		e.tsFirst.Unlock()
+		e.tsMu.Lock()
+		up = e.tsUp
+		e.tsMu.Unlock()
+	}
+	return up
+}
+
+// askTailscale asks Tailscale for this computer's state, outside any lock.
+func (e *Engine) askTailscale() {
+	s, err := tailnet.Local(context.Background())
+	e.tsMu.Lock()
+	e.tsUp = err == nil && s.BackendState == "Running"
+	e.tsUserspace = err == nil && !s.TUN
+	e.tsChecked = time.Now()
+	e.tsMu.Unlock()
 }
 
 // TailscaleStatus reports this computer's Tailscale state for the UI.

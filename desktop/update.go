@@ -185,7 +185,7 @@ func readUpdateState() updateState {
 	}
 	// What is waiting to be installed is what's on disk.
 	if s.Ready != "" {
-		if v := plistValue(filepath.Join(readyApp(), "Contents", "Info.plist"), "CFBundleShortVersionString"); v != s.Ready {
+		if v := readyVersion(); v != s.Ready {
 			s.Ready = ""
 			if s.State == "ready" {
 				s.State = ""
@@ -193,6 +193,28 @@ func readUpdateState() updateState {
 		}
 	}
 	return s
+}
+
+// readyVersion is the version of the update waiting in ready/ ("" when none), read again
+// only when its Info.plist changes: every window asks every few seconds.
+var readyCache struct {
+	sync.Mutex
+	mod time.Time
+	v   string
+}
+
+func readyVersion() string {
+	plist := filepath.Join(readyApp(), "Contents", "Info.plist")
+	fi, err := os.Stat(plist)
+	if err != nil {
+		return ""
+	}
+	readyCache.Lock()
+	defer readyCache.Unlock()
+	if !fi.ModTime().Equal(readyCache.mod) {
+		readyCache.mod, readyCache.v = fi.ModTime(), plistValue(plist, "CFBundleShortVersionString")
+	}
+	return readyCache.v
 }
 
 func writeUpdateState(s updateState) {

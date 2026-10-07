@@ -351,13 +351,19 @@ func (t *Terminal) pump() {
 			chunk := append([]byte(nil), buf[:n]...)
 			t.mu.Lock()
 			t.replay = append(t.replay, chunk...)
-			if len(t.replay) > replayLimit {
+			// Trimmed back in steps, not on every read: past the limit each trim copies it all.
+			if len(t.replay) > replayLimit+replayLimit/4 {
 				t.replay = append([]byte(nil), t.replay[len(t.replay)-replayLimit:]...)
 			}
-			for _, ch := range t.clients {
+			for c, ch := range t.clients {
 				select {
 				case ch <- chunk:
-				default: // a stuck client must not block the terminal
+				default:
+					// A client this far behind would show a screen with pieces missing. It is
+					// let go instead: it connects again and gets the screen whole from the
+					// replay. (A stuck client must not block the terminal either way.)
+					delete(t.clients, c)
+					go c.Close(websocket.StatusTryAgainLater, "fell behind")
 				}
 			}
 			t.mu.Unlock()

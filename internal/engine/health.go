@@ -450,10 +450,7 @@ func loadRuns(name string) []upRun {
 
 func saveRuns(name string, runs []upRun) {
 	b, _ := json.Marshal(runs)
-	tmp := runsPath(name) + ".tmp"
-	if os.WriteFile(tmp, b, 0o600) == nil {
-		_ = os.Rename(tmp, runsPath(name))
-	}
+	_, _ = paths.WriteFile(runsPath(name), b, 0o600)
 }
 
 // recordUp notes that the machine has been running from booted until seen.

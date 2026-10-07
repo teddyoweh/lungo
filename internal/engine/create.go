@@ -216,7 +216,9 @@ func (e *Engine) JoinTailscale(ctx context.Context, name string, r events.Report
 		return err
 	}
 	m.TailscaleIP, m.TailscaleName = ip, dns
-	e.tsChecked = time.Time{}
+	e.tsMu.Lock()
+	e.tsChecked = time.Time{} // ask again: this computer is on the tailnet now
+	e.tsMu.Unlock()
 	if err := e.save(m); err != nil {
 		return err
 	}
@@ -363,7 +365,9 @@ func (e *Engine) Add(ctx context.Context, a AddSpec, r events.Reporter) (*model.
 		return nil, err
 	}
 	if m.TailscaleIP != "" {
+		e.tsMu.Lock()
 		e.tsChecked = time.Time{}
+		e.tsMu.Unlock()
 		t = e.Target(m)
 	}
 

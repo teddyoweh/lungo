@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"skybuild/internal/proc"
 )
 
 // Runs against a tmux server of the test's own; skipped where tmux isn't installed.
@@ -138,8 +140,8 @@ func names(list []Session) []string {
 }
 
 func TestClaudeUnder(t *testing.T) {
-	p := procTable{
-		args: map[int]string{
+	p := procTable{proc.Known(
+		map[int]string{
 			10: "-zsh",
 			11: "/Users/x/.local/share/claude/versions/2.1.92 --resume abc",
 			20: "-zsh",
@@ -148,8 +150,8 @@ func TestClaudeUnder(t *testing.T) {
 			31: "bash -c claude",
 			32: "claude --continue",
 		},
-		kids: map[int][]int{10: {11}, 20: {21}, 30: {31}, 31: {32}},
-	}
+		map[int][]int{10: {11}, 20: {21}, 30: {31}, 31: {32}},
+	)}
 	for shell, want := range map[int]int{10: 11, 20: 0, 30: 32, 0: 0, 99: 0} {
 		if got := p.claudeUnder(shell); got != want {
 			t.Errorf("claudeUnder(%d) = %d, want %d", shell, got, want)
@@ -347,5 +349,21 @@ func TestParseRemoteFiles(t *testing.T) {
 	}
 	if got[2].Path != "/home/t/a\tb.txt" {
 		t.Errorf("tab in a name: %+v", got[2])
+	}
+}
+
+// The command lines the system hands over match what ps shows (macOS reads them directly).
+func TestProcessTableReadsThisProcess(t *testing.T) {
+	p := processTable(context.Background())
+	me, parent := os.Getpid(), os.Getppid()
+	found := false
+	for _, k := range p.Kids[parent] {
+		found = found || k == me
+	}
+	if !found {
+		t.Fatalf("this process (%d) isn't listed under its parent (%d)", me, parent)
+	}
+	if a := p.args(me); !strings.Contains(a, filepath.Base(os.Args[0])) {
+		t.Fatalf("args(%d) = %q, want this test binary", me, a)
 	}
 }

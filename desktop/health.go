@@ -2,7 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -11,6 +14,7 @@ import (
 	"skybuild/internal/config"
 	"skybuild/internal/engine"
 	"skybuild/internal/events"
+	"skybuild/internal/paths"
 	"skybuild/internal/syncer"
 )
 
@@ -88,7 +92,15 @@ func (a *App) pollHealth(ctx context.Context) HealthView {
 	if primary { // once, however many windows are open
 		a.eng.NoteStops(c)
 	}
-	health := a.eng.HealthAll(c)
+	var health map[string]engine.Health
+	if shared, ok := sharedHealth(); !primary && ok {
+		health = shared // the window that checks shared it: no second round of ssh
+	} else {
+		health = a.eng.HealthAll(c)
+		if primary {
+			shareHealth(health)
+		}
+	}
 	keeper.mu.Lock()
 	keeper.latest = health
 	keeper.mu.Unlock()
@@ -304,4 +316,28 @@ func (a *App) afterStart(machine, id string) {
 		a.pollHealth(a.ctx)
 		return
 	}
+}
+
+// The machines' health, as the window that checks them last found it, for the others.
+func sharedHealthFile() string { return filepath.Join(paths.State(), "health-shared.json") }
+
+func shareHealth(h map[string]engine.Health) {
+	if b, err := json.Marshal(h); err == nil {
+		_ = os.MkdirAll(paths.State(), 0o700)
+		_, _ = paths.WriteFile(sharedHealthFile(), b, 0o600)
+	}
+}
+
+// sharedHealth is that, when it is recent (two rounds at most).
+func sharedHealth() (map[string]engine.Health, bool) {
+	fi, err := os.Stat(sharedHealthFile())
+	if err != nil || time.Since(fi.ModTime()) > 2*healthEvery+10*time.Second {
+		return nil, false
+	}
+	b, err := os.ReadFile(sharedHealthFile())
+	if err != nil {
+		return nil, false
+	}
+	var h map[string]engine.Health
+	return h, json.Unmarshal(b, &h) == nil
 }

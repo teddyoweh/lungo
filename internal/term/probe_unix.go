@@ -11,42 +11,21 @@ import (
 	"strconv"
 	"strings"
 	"time"
-)
 
-type psRow struct {
-	pid, ppid, pgid, tpgid int
-	args                   string
-}
+	procs "skybuild/internal/proc"
+)
 
 // probe reads the process tree under a terminal's shell. The program "in front" is the
 // leader of the terminal's foreground process group (the shell itself at an idle prompt).
+// The table comes from the system directly (see package proc), command lines only for this tree.
 func probe(shell int) Probe {
 	if shell <= 0 {
 		return Probe{}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "ps", "-A", "-o", "pid=,ppid=,pgid=,tpgid=,args=").Output()
-	if err != nil {
-		return Probe{}
-	}
-	rows := map[int]psRow{}
-	kids := map[int][]int{}
-	for _, line := range strings.Split(string(out), "\n") {
-		f := strings.Fields(line)
-		if len(f) < 5 {
-			continue
-		}
-		var r psRow
-		r.pid, _ = strconv.Atoi(f[0])
-		r.ppid, _ = strconv.Atoi(f[1])
-		r.pgid, _ = strconv.Atoi(f[2])
-		r.tpgid, _ = strconv.Atoi(f[3])
-		r.args = strings.Join(f[4:], " ")
-		rows[r.pid] = r
-		kids[r.ppid] = append(kids[r.ppid], r.pid)
-	}
-	root, ok := rows[shell]
+	t := procs.List(ctx)
+	root, ok := t.Rows[shell]
 	if !ok {
 		return Probe{}
 	}
@@ -54,27 +33,28 @@ func probe(shell int) Probe {
 	front := root
 	var walk func(pid, depth int)
 	walk = func(pid, depth int) {
-		r := rows[pid]
-		if isClaude(r.args) {
+		r := t.Rows[pid]
+		if isClaude(t.Args(pid)) {
 			p.Claude = true
 		}
-		if r.pid == root.tpgid {
+		if r.PID == root.TPGID {
 			front = r
 		}
 		if depth > 12 {
 			return
 		}
-		for _, k := range kids[pid] {
+		for _, k := range t.Kids[pid] {
 			walk(k, depth+1)
 		}
 	}
 	walk(shell, 0)
-	p.Command = commandName(front.args)
-	if isClaude(front.args) {
+	args := t.Args(front.PID)
+	p.Command = commandName(args)
+	if isClaude(args) {
 		p.Command = "claude"
 	}
-	p.Cwd = cwdOf(ctx, front.pid)
-	if p.Cwd == "" && front.pid != shell {
+	p.Cwd = cwdOf(ctx, front.PID)
+	if p.Cwd == "" && front.PID != shell {
 		p.Cwd = cwdOf(ctx, shell)
 	}
 	return p

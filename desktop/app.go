@@ -906,8 +906,18 @@ type SessionsView struct {
 }
 
 // Sessions returns the latest poll (and triggers a fresh one).
+// Sessions is what is known right now (at once: a first paint doesn't wait on the machines),
+// with a fresh look started behind it; what that finds arrives as "sessions" events.
 func (a *App) Sessions() SessionsView {
-	return a.poll.refresh(a.ctx)
+	go func() {
+		if a.poll.primary() {
+			go a.poll.refreshLocal(a.ctx)
+			a.poll.refresh(a.ctx)
+		} else {
+			a.poll.follow(a.ctx)
+		}
+	}()
+	return a.poll.current()
 }
 
 func (a *App) NewSession(machine string, o engine.SessionOptions) (engine.Session, error) {
@@ -915,7 +925,7 @@ func (a *App) NewSession(machine string, o engine.SessionOptions) (engine.Sessio
 	defer cancel()
 	s, err := a.eng.NewSession(ctx, machine, o)
 	if err == nil {
-		go a.poll.refresh(a.ctx)
+		go a.refreshSessions(machine)
 	}
 	return s, err
 }

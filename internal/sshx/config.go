@@ -63,7 +63,8 @@ func WriteConfig(machines []*model.Machine, route func(*model.Machine) Route) er
 		}
 		b.WriteString("\n")
 	}
-	if err := os.WriteFile(paths.SSHConfig(), []byte(b.String()), 0o600); err != nil {
+	// Written whole and only on change: ssh (yours, Claude's) may be reading it this moment.
+	if _, err := paths.WriteFile(paths.SSHConfig(), []byte(b.String()), 0o600); err != nil {
 		return err
 	}
 	return ensureInclude()
@@ -90,7 +91,8 @@ func ensureInclude() error {
 		return err
 	}
 	out := includeMarker + "\n" + line + "\n\n" + string(cur)
-	return os.WriteFile(user, []byte(out), 0o600)
+	_, err = paths.WriteFile(user, []byte(out), 0o600)
+	return err
 }
 
 // RemoveInclude takes sky's line back out of ~/.ssh/config.

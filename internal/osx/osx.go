@@ -153,6 +153,13 @@ func FixPath() {
 	if runtime.GOOS == "windows" {
 		return
 	}
+	// The PATH found last time goes in at once, so nothing waits on the login shell (it can
+	// take seconds); the shell is asked again in the background to keep it current.
+	if b, err := os.ReadFile(pathCache()); err == nil && len(b) > 0 {
+		os.Setenv("PATH", strings.TrimSpace(string(b))+string(os.PathListSeparator)+os.Getenv("PATH"))
+		go fixPath(20 * time.Second) // the shell's answer goes in front; the remembered one stays behind it
+		return
+	}
 	if fixPath(6 * time.Second) {
 		return
 	}
@@ -213,6 +220,9 @@ func preferredLocale() string {
 
 var pathFixed atomic.Bool
 
+// pathCache is the login shell's PATH as last found.
+func pathCache() string { return filepath.Join(paths.Root(), "state", "login-path") }
+
 // fixPath asks the login shell for PATH once; it reports whether that worked.
 func fixPath(limit time.Duration) bool {
 	if pathFixed.Load() {
@@ -235,6 +245,8 @@ func fixPath(limit time.Duration) bool {
 		if p := strings.TrimSpace(s[i+len("__SKY_PATH__"):]); p != "" {
 			os.Setenv("PATH", p+string(os.PathListSeparator)+os.Getenv("PATH"))
 			pathFixed.Store(true)
+			_ = os.MkdirAll(filepath.Dir(pathCache()), 0o700)
+			_, _ = paths.WriteFile(pathCache(), []byte(p+"\n"), 0o600)
 			return true
 		}
 	}

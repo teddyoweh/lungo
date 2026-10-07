@@ -255,11 +255,9 @@ func (c *Config) save() error {
 	if err != nil {
 		return err
 	}
-	tmp := paths.Config() + ".tmp"
-	if err := os.WriteFile(tmp, append(b, '\n'), 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, paths.Config())
+	// Unchanged, it stays untouched: every window watches this file's time for changes.
+	_, err = paths.WriteFile(paths.Config(), append(b, '\n'), 0o600)
+	return err
 }
 
 // Machine finds a machine by name.

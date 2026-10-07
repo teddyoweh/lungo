@@ -56,6 +56,8 @@ type Session struct {
 	// Agent is the coding agent running in the session ("claude", "codex", "grok", "mantis";
 	// see Agents), "" for none. Claude is also Claude == true.
 	Agent string `json:"agent,omitempty"`
+	// Stale: as last seen; its machine (or this computer's tmux) can't be read right now.
+	Stale bool `json:"stale,omitempty"`
 }
 
 // Key identifies a session across machines.

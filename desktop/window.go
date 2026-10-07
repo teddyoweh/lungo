@@ -117,18 +117,14 @@ func (w *window) start() {
 		})
 	}
 	w.tryPrimary()
-	go func() {
-		t := time.NewTicker(5 * time.Second)
-		defer t.Stop()
-		for {
-			select {
-			case <-w.stop:
-				return
-			case <-t.C:
-				w.tryPrimary()
+	if !w.primary.Load() && os.Getenv("SKY_HEADLESS") == "" {
+		// Wait on the lock itself: the moment the primary quits, this window takes over.
+		go func() {
+			if w.lock.Lock() == nil {
+				w.primary.Store(true)
 			}
-		}
-	}()
+		}()
+	}
 }
 
 func (w *window) tryPrimary() {

@@ -480,7 +480,7 @@ func (e *Engine) Projects(ctx context.Context, fresh bool) (*ProjectList, error)
 	projectsCache = list
 	projectsMu.Unlock()
 	if b, err := json.Marshal(list); err == nil && paths.Ensure() == nil {
-		_ = os.WriteFile(projectsCachePath(), b, 0o600)
+		_, _ = paths.WriteFile(projectsCachePath(), b, 0o600)
 	}
 	return list, nil
 }

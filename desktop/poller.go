@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -13,22 +15,34 @@ import (
 	wruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"skybuild/internal/engine"
+	"skybuild/internal/model"
 	"skybuild/internal/paths"
 )
 
 // poller keeps sessions and machine status fresh while the app is open, and notifies when
 // a Claude session needs you or finishes.
+//
+// One window polls for all of them: the primary (see window.go). It publishes what it finds
+// to ~/.skybuild/state/sessions-shared.json, which the other windows read within half a
+// second; a window that opens shows the sessions at once. Any window refreshes on the spot
+// after something it did (a session ended, one started) and shares the result the same way.
 type poller struct {
 	a *App
 
 	mu         sync.Mutex
-	last       SessionsView      // what the UI has: this computer's sessions, then the machines'
-	remote     SessionsView      // the machines' part
-	local      []engine.Session  // this computer's part
-	states     map[string]string // session key → last Claude state
+	last       SessionsView                // what the UI has: this computer's sessions, then the machines'
+	local      []engine.Session            // this computer's part
+	localErr   string                      // why it couldn't be read, last time
+	remote     map[string][]engine.Session // each machine's part, as it last answered
+	remoteErr  map[string]string           // machines that didn't answer, and why
+	states     map[string]string           // session key → last Claude state
 	primed     bool
 	keep       map[string][]string // shell sessions this window's panes point at, per machine
 	quietSince time.Time           // start, or the last wake: no tidying right after
+	shared     struct {            // the shared file as last read
+		mod  time.Time
+		size int64
+	}
 	// When a refresh of the machines and one of this computer started (zero: none running).
 	// A refresh that runs far too long no longer holds the next one back: see begin.
 	remoteSince atomic.Int64
@@ -61,8 +75,12 @@ func end(since *atomic.Int64, started int64) { since.CompareAndSwap(started, 0) 
 
 func newPoller(a *App) *poller {
 	empty := SessionsView{Sessions: []engine.Session{}, Errors: map[string]string{}}
-	return &poller{a: a, states: map[string]string{}, last: empty, remote: empty, quietSince: time.Now()}
+	return &poller{a: a, states: map[string]string{}, last: empty, remote: map[string][]engine.Session{}, remoteErr: map[string]string{}, quietSince: time.Now()}
 }
+
+func (p *poller) primary() bool { return p.a.win.primary.Load() }
+
+func sharedSessionsFile() string { return filepath.Join(paths.State(), "sessions-shared.json") }
 
 func (p *poller) run(ctx context.Context) {
 	sessionsTick := time.NewTicker(5 * time.Second)
@@ -70,46 +88,67 @@ func (p *poller) run(ctx context.Context) {
 	claudeTick := time.NewTicker(60 * time.Second)
 	reapTick := time.NewTicker(5 * time.Minute)
 	localTick := time.NewTicker(2 * time.Second)
+	shareTick := time.NewTicker(500 * time.Millisecond)
 	accountsTick := time.NewTicker(3 * time.Second)
 	defer accountsTick.Stop()
+	defer shareTick.Stop()
 	accountsSeen := accountFilesStamp()
 	defer reapTick.Stop()
 	defer localTick.Stop()
 	go p.watchWake(ctx)
-	go p.refreshLocal(ctx)
 	defer sessionsTick.Stop()
 	defer machinesTick.Stop()
 	defer claudeTick.Stop()
-	go p.refresh(ctx)
-	go p.a.RefreshMachines()
+	if p.primary() {
+		go p.refreshLocal(ctx)
+		go p.refresh(ctx)
+		go p.a.RefreshMachines()
+	} else {
+		p.follow(ctx)
+	}
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-sessionsTick.C:
-			go p.refresh(ctx)
+			if p.primary() {
+				go p.refresh(ctx)
+			}
 		case <-machinesTick.C:
-			go p.a.RefreshMachines()
+			if p.primary() {
+				go p.a.RefreshMachines()
+			}
 		case <-claudeTick.C:
-			if p.a.win.primary.Load() { // once, however many windows are open
+			if p.primary() { // once, however many windows are open
 				go p.claude(ctx)
 			}
 		case <-localTick.C:
-			go p.refreshLocal(ctx)
+			if p.primary() {
+				go p.refreshLocal(ctx)
+			}
+		case <-shareTick.C:
+			if !p.primary() {
+				p.follow(ctx)
+			}
 		case <-accountsTick.C:
-			// The accounts changed somewhere else (the background agent switched, a usage check
-			// came in, the CLI): show it now, and look at the sessions again.
+			// The accounts or the machines changed somewhere else (another window's refresh,
+			// the background agent switched accounts, a usage check came in, the CLI): show
+			// it now.
 			if st := accountFilesStamp(); st != accountsSeen {
 				accountsSeen = st
 				p.a.emitClaude()
-				go p.refresh(ctx)
+				if p.primary() {
+					go p.refresh(ctx)
+				} else {
+					p.a.emitMachines()
+				}
 			}
 		case <-reapTick.C:
 			p.mu.Lock()
 			keep, settled := p.keep, time.Since(p.quietSince) > 4*time.Minute
 			p.mu.Unlock()
 			// Not right after a start or a wake: panes are still finding their shells again.
-			if p.a.win.primary.Load() && settled {
+			if p.primary() && settled {
 				go p.a.eng.ReapShells(ctx, p.a.win.keepAll(keep)) // every window's shells, not only this one's
 			}
 		}
@@ -121,7 +160,17 @@ func (p *poller) run(ctx context.Context) {
 func (p *poller) sessions() []engine.Session {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.remote.Sessions
+	return p.remoteList()
+}
+
+// remoteList is every machine's sessions, newest first. Call with p.mu held.
+func (p *poller) remoteList() []engine.Session {
+	var out []engine.Session
+	for _, list := range p.remote {
+		out = append(out, list...)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Created.After(out[j].Created) })
+	return out
 }
 
 // publishedSessions is every session the UI was last told about, this computer's included.
@@ -131,8 +180,17 @@ func (p *poller) publishedSessions() []engine.Session {
 	return append([]engine.Session(nil), p.last.Sessions...)
 }
 
+// current is what the UI was last sent.
+func (p *poller) current() SessionsView {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.last
+}
+
 // refreshLocal lists the sessions on this computer. It is cheap (no network), so it runs
 // often: a local pane's folder, title and Claude state follow within a couple of seconds.
+// When the list can't be read, the sessions last seen stay (marked stale) and the reason is
+// shown, rather than an empty list.
 func (p *poller) refreshLocal(ctx context.Context) {
 	started, ok := begin(&p.localSince, 20*time.Second, "local")
 	if !ok {
@@ -143,33 +201,133 @@ func (p *poller) refreshLocal(ctx context.Context) {
 		p.anchored.Store(engine.AnchorLocalSessions(ctx, ownProgram()))
 	}
 	list, err := p.a.eng.LocalSessions(ctx)
+	p.mu.Lock()
 	if err != nil {
-		noteErr("local sessions: %v", err)
+		if p.localErr != err.Error() {
+			noteErr("local sessions: %v", err)
+		}
+		p.localErr = err.Error()
+		p.local = staled(p.local)
+	} else {
+		p.localErr = ""
+		p.local = list
+	}
+	p.mu.Unlock()
+	p.publish()
+}
+
+// staled marks sessions as last known: their machine (or tmux) can't be read right now.
+func staled(list []engine.Session) []engine.Session {
+	out := make([]engine.Session, len(list))
+	for i, s := range list {
+		s.Stale = true
+		out[i] = s
+	}
+	return out
+}
+
+// publish sends the UI everything known: this computer's sessions and the machines'. What
+// changed is shared with the other windows.
+func (p *poller) publish() SessionsView {
+	p.mu.Lock()
+	remote := p.remoteList()
+	all := make([]engine.Session, 0, len(p.local)+len(remote))
+	all = append(append(all, p.local...), remote...)
+	errs := map[string]string{}
+	for k, v := range p.remoteErr {
+		errs[k] = v
+	}
+	if p.localErr != "" {
+		errs[engine.LocalMachine] = p.localErr
+	}
+	v := SessionsView{Sessions: all, Errors: errs, At: time.Now()}
+	changed := !reflect.DeepEqual(v.Sessions, p.last.Sessions) || !reflect.DeepEqual(v.Errors, p.last.Errors)
+	p.last = v
+	p.mu.Unlock()
+	if !changed {
+		return v
+	}
+	p.notify(all)
+	wruntime.EventsEmit(p.a.ctx, "sessions", v)
+	p.share(v)
+	return v
+}
+
+// share leaves the sessions for the other windows (only when they changed).
+func (p *poller) share(v SessionsView) {
+	b, err := json.Marshal(SessionsView{Sessions: v.Sessions, Errors: v.Errors})
+	if err != nil {
 		return
 	}
-	p.mu.Lock()
-	same := reflect.DeepEqual(list, p.local) || (len(list) == 0 && len(p.local) == 0)
-	p.local = list
-	p.mu.Unlock()
-	if !same {
-		p.publish()
+	_ = os.MkdirAll(paths.State(), 0o700)
+	if _, err := paths.WriteFile(sharedSessionsFile(), b, 0o600); err == nil {
+		if fi, err := os.Stat(sharedSessionsFile()); err == nil {
+			p.mu.Lock()
+			p.shared.mod, p.shared.size = fi.ModTime(), fi.Size()
+			p.mu.Unlock()
+		}
 	}
 }
 
-// publish sends the UI everything known: this computer's sessions and the machines'.
-func (p *poller) publish() SessionsView {
+// follow takes up what another window shared. If nothing has been shared for a while (the
+// window that polls is stuck), this one looks for itself.
+func (p *poller) follow(ctx context.Context) {
+	fi, err := os.Stat(sharedSessionsFile())
+	if err != nil || time.Since(fi.ModTime()) > 20*time.Second {
+		go p.refreshLocal(ctx)
+		if err != nil || time.Since(fi.ModTime()) > 45*time.Second {
+			go p.refresh(ctx)
+		}
+		if err != nil {
+			return
+		}
+	}
 	p.mu.Lock()
-	all := make([]engine.Session, 0, len(p.local)+len(p.remote.Sessions))
-	all = append(append(all, p.local...), p.remote.Sessions...)
-	v := SessionsView{Sessions: all, Errors: p.remote.Errors, At: time.Now()}
+	seen := fi.ModTime().Equal(p.shared.mod) && fi.Size() == p.shared.size
+	p.mu.Unlock()
+	if seen {
+		return
+	}
+	b, err := os.ReadFile(sharedSessionsFile())
+	if err != nil {
+		return
+	}
+	var v SessionsView
+	if json.Unmarshal(b, &v) != nil {
+		return
+	}
+	if v.Sessions == nil {
+		v.Sessions = []engine.Session{}
+	}
 	if v.Errors == nil {
 		v.Errors = map[string]string{}
 	}
+	v.At = time.Now()
+	p.mu.Lock()
+	p.shared.mod, p.shared.size = fi.ModTime(), fi.Size()
+	same := reflect.DeepEqual(v.Sessions, p.last.Sessions) && reflect.DeepEqual(v.Errors, p.last.Errors)
+	// Kept by part, so this window carries on from here if it becomes the one that polls.
+	p.local, p.remote = nil, map[string][]engine.Session{}
+	for _, s := range v.Sessions {
+		if engine.IsLocal(s.Machine) {
+			p.local = append(p.local, s)
+		} else {
+			p.remote[s.Machine] = append(p.remote[s.Machine], s)
+		}
+	}
+	p.localErr = v.Errors[engine.LocalMachine]
+	p.remoteErr = map[string]string{}
+	for k, e := range v.Errors {
+		if !engine.IsLocal(k) {
+			p.remoteErr[k] = e
+		}
+	}
 	p.last = v
 	p.mu.Unlock()
-	p.notify(all)
-	wruntime.EventsEmit(p.a.ctx, "sessions", v)
-	return v
+	if !same {
+		p.notify(v.Sessions)
+		wruntime.EventsEmit(p.a.ctx, "sessions", v)
+	}
 }
 
 // claude runs a Claude account rotation pass: scheduled usage checks, and a switch to the
@@ -187,34 +345,70 @@ func (p *poller) claude(ctx context.Context) {
 	p.a.emitClaude()
 }
 
-// refresh polls every running machine's sessions (one at a time) and emits "sessions".
+// refresh polls every running machine's sessions, all at once, and publishes each machine's
+// as soon as it answers: a slow machine doesn't hold the others back. A machine that doesn't
+// answer keeps its sessions as last seen, marked stale, with the reason.
 func (p *poller) refresh(ctx context.Context) SessionsView {
 	started, ok := begin(&p.remoteSince, 60*time.Second, "machines")
 	if !ok {
-		p.mu.Lock()
-		defer p.mu.Unlock()
-		return p.last
+		return p.current()
 	}
 	defer end(&p.remoteSince, started)
 	ms, _ := p.a.eng.Machines()
-	if len(ms) == 0 {
-		return p.store(SessionsView{Sessions: []engine.Session{}, Errors: map[string]string{}, At: time.Now()})
+	running := map[string]bool{}
+	for _, m := range ms {
+		if m.Status != model.StatusStopped && m.Status != model.StatusMissing {
+			running[m.Name] = true
+		}
+	}
+	p.mu.Lock()
+	for name := range p.remote {
+		if !running[name] {
+			delete(p.remote, name)
+		}
+	}
+	for name := range p.remoteErr {
+		if !running[name] {
+			delete(p.remoteErr, name)
+		}
+	}
+	p.mu.Unlock()
+	if len(running) == 0 {
+		return p.publish()
 	}
 	c, cancel := context.WithTimeout(ctx, 25*time.Second)
 	defer cancel()
-	list, errs := p.a.eng.AllSessions(c)
-	if list == nil {
-		list = []engine.Session{}
+	var wg sync.WaitGroup
+	for name := range running {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			list, err := p.a.eng.Sessions(c, name)
+			p.mu.Lock()
+			if err != nil {
+				p.remoteErr[name] = err.Error()
+				p.remote[name] = staled(p.remote[name])
+			} else {
+				delete(p.remoteErr, name)
+				p.remote[name] = list
+			}
+			p.mu.Unlock()
+			p.publish()
+		}()
 	}
-	if errs == nil {
-		errs = map[string]string{}
+	wg.Wait()
+	p.mu.Lock()
+	errs := map[string]string{}
+	for k, v := range p.remoteErr {
+		errs[k] = v
 	}
-	v := SessionsView{Sessions: list, Errors: errs, At: time.Now()}
+	list := p.remoteList()
+	p.mu.Unlock()
 	p.a.eng.TendTerminals(ctx, errs) // keep each machine ready for a pane to open instantly
-	if p.a.win.primary.Load() {
+	if p.primary() {
 		go p.relogin(ctx, list)
 	}
-	return p.store(v)
+	return p.current()
 }
 
 // relogin moves sessions still on a login the machines have switched off (an account at its
@@ -239,14 +433,6 @@ func (p *poller) relogin(ctx context.Context, list []engine.Session) {
 		time.Sleep(1500 * time.Millisecond)
 		p.refresh(ctx)
 	}()
-}
-
-// store takes a poll of the machines and publishes it together with this computer's sessions.
-func (p *poller) store(v SessionsView) SessionsView {
-	p.mu.Lock()
-	p.remote = v
-	p.mu.Unlock()
-	return p.publish()
 }
 
 func (p *poller) notify(list []engine.Session) {
