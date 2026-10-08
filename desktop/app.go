@@ -91,6 +91,7 @@ func (a *App) startup(ctx context.Context) {
 func (a *App) domReady(ctx context.Context) {
 	<-a.ready
 	compactTitleBar()
+	keepDrawn()
 	go a.poll.run(ctx)
 	go func() { _ = a.eng.SyncSSHConfig() }()
 	go a.healthLoop(ctx)

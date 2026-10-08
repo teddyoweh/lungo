@@ -223,6 +223,50 @@ static void skyDebugClick(double x, double y, unsigned long flags) {
 	});
 }
 
+// Whether the web view decides for itself that the page is hidden when its window is
+// covered or on a Space that isn't showing (WebKit's default).
+static void skyOcclusionDetection(NSView *web, BOOL on) {
+	SEL sel = NSSelectorFromString(@"_setWindowOcclusionDetectionEnabled:");
+	if (web == nil || ![web respondsToSelector:sel]) {
+		return;
+	}
+	NSInvocation *inv = [NSInvocation invocationWithMethodSignature:[web methodSignatureForSelector:sel]];
+	inv.selector = sel;
+	inv.target = web;
+	[inv setArgument:&on atIndex:2];
+	[inv invoke];
+}
+
+extern void skyShownChanged(int shown);
+
+// WebKit treats a page whose window can't be seen (covered, or on a Space that isn't
+// showing) as in the background, and within seconds lets its web process sleep, which
+// throws away everything the page drew (WebProcess::prepareToSuspend, then
+// destroyRenderingResources). Mission Control then shows the window empty, and swiping to
+// its Space shows it blank until it draws again. So the web view stops judging that for
+// itself and keeps its picture; the page is told instead whether the window can be seen
+// (lib/shown.ts) and rests while it can't, as it did. A minimised window or a hidden app
+// still counts as hidden to WebKit.
+static void skyKeepDrawn(void) {
+	static BOOL watching = NO;
+	dispatch_async(dispatch_get_main_queue(), ^{
+		NSWindow *w = skyWindow();
+		NSView *web = w == nil ? nil : skyFindWebView(w.contentView);
+		if (web == nil) {
+			return;
+		}
+		skyOcclusionDetection(web, NO);
+		skyShownChanged((w.occlusionState & NSWindowOcclusionStateVisible) != 0);
+		if (watching) {
+			return;
+		}
+		watching = YES;
+		[[NSNotificationCenter defaultCenter] addObserverForName:NSWindowDidChangeOcclusionStateNotification object:w queue:nil usingBlock:^(NSNotification *n) {
+			skyShownChanged((w.occlusionState & NSWindowOcclusionStateVisible) != 0);
+		}];
+	});
+}
+
 // Dev checks only: orders the hidden window in so the web view lays out and animates as it
 // would on screen, but fully transparent, deaf to the mouse, behind everything and left out
 // of Mission Control, so nothing shows. (Moving it off every screen doesn't work: the
@@ -235,15 +279,7 @@ static int skyDebugStage(void) {
 			return;
 		}
 		NSView *web = skyFindWebView(w.contentView);
-		SEL sel = NSSelectorFromString(@"_setWindowOcclusionDetectionEnabled:");
-		if (web != nil && [web respondsToSelector:sel]) {
-			NSInvocation *inv = [NSInvocation invocationWithMethodSignature:[web methodSignatureForSelector:sel]];
-			BOOL off = NO;
-			inv.selector = sel;
-			inv.target = web;
-			[inv setArgument:&off atIndex:2];
-			[inv invoke];
-		}
+		skyOcclusionDetection(web, NO);
 		w.alphaValue = 0;
 		w.ignoresMouseEvents = YES;
 		w.hasShadow = NO;
@@ -370,6 +406,10 @@ import (
 
 // compactTitleBar shrinks the macOS title bar to the height of the top bar.
 func compactTitleBar() { C.skyCompactTitleBar() }
+
+// keepDrawn keeps the window's picture while it can't be seen, and tells the page when it
+// can (see skyKeepDrawn).
+func keepDrawn() { C.skyKeepDrawn() }
 
 // backgroundApp keeps a headless dev instance out of the Dock.
 func backgroundApp() { C.skyBackground() }

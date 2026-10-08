@@ -4,6 +4,7 @@ import { api, call, errText, type Session } from "../lib/api";
 import { closeGroup, closeTab, focusGroup, getState, isIdleShell, jumpNeedsYou, loadSessions, needsYou, newTab, openLocalTab, openSessionTab, openShellTab, paneFolder, paneTitle, reattachTab, sessionFor, setState, splitPane, toast, toggleZoom, updateTab, useStore, type Group, type Tab, persistent, tabMachine, machineLabel, SHELL_PREFIX, gitKey, visibleGroups, setWorkspace, addWorkspace, renameWorkspace, removeWorkspace, moveToWorkspace, closeOtherGroups, togglePin, metaKey, setMeta, colorValue, COLORS, recipeFrom, liveClaude, restartClaude, placeSessionBy, combineGroups, placePaneBy, moveToOwnTab, separateGroup, moveGroupToNewWindow, openAgentTab, LOCAL } from "../lib/store";
 import { AGENT_NAMES, ago, baseName, cx, hasAgent, mod, sessionLabel, tildePath } from "../lib/util";
 import { DividerHandle, PaneFrame, PaneIcon } from "../components/Panes";
+import { MoveButton } from "../components/MoveButton";
 import { askConfirm, askText, showMenu, type MenuRow } from "../components/ContextMenu";
 import { getDragged, setDragged, useDragged } from "../lib/drag";
 import { geometry, leaves } from "../lib/panes";
@@ -346,6 +347,8 @@ function TopBar({ group, multi, active, activeSession }: { group?: Group; multi:
             )}
           </>
         )}
+        {/* With panes side by side each has it in its title bar. */}
+        {active && !multi && <MoveButton tab={active} session={activeSession} className="size-6" />}
         {active && <TabActions tab={active} />}
       </div>
     </div>

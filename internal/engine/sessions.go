@@ -602,7 +602,8 @@ type AttachOptions struct {
 	Resume string `json:"resume"`
 	// Flags start Claude the way it was started before (see ClaudeFlags; anything else is dropped).
 	Flags string `json:"flags"`
-	// Prompt is Claude's first message in a session that is being made (not when resuming).
+	// Prompt is Claude's first message in a session that is being made; when resuming a
+	// conversation by its ID, the next message in it ("continue" takes none).
 	Prompt string `json:"prompt"`
 	// Run is a command typed into a new shell session once it is made (a recipe's command).
 	Run string `json:"run"`
@@ -852,22 +853,26 @@ func attachScriptWith(final, session string, o AttachOptions) string {
 		if f := ClaudeFlags(o.Flags); f != "" {
 			flags = " " + f
 		}
-		line := `line=` + sshx.Quote("claude"+flags) + `;`
-		if p := strings.TrimSpace(o.Prompt); p != "" && o.Resume == "" {
-			// The message goes through a file, so anything can be in it: the session's shell
-			// reads it back when it runs the command.
+		// The first message goes through a file, so anything can be in it: the session's shell
+		// reads it back when it runs the command. With a given conversation picked up again it
+		// is the next message in it (a session moved here in the middle of its work goes on);
+		// "the latest conversation here" takes none, as it may not be the one meant.
+		prep, first := "", ""
+		if p := strings.TrimSpace(o.Prompt); p != "" {
 			if len(p) > 32*1024 {
 				p = p[:32*1024]
 			}
 			file := `"$HOME"/.skybuild/prompts/` + sshx.Quote(SessionName(session)+".txt")
-			line = `mkdir -p "$HOME"/.skybuild/prompts && printf '%s' ` + sshx.Quote(p) + ` > ` + file + `; line=` + sshx.Quote("claude"+flags+` "$(cat ~/.skybuild/prompts/`+SessionName(session)+`.txt)"`) + `;`
+			prep = `mkdir -p "$HOME"/.skybuild/prompts && printf '%s' ` + sshx.Quote(p) + ` > ` + file + `; `
+			first = ` "$(cat ~/.skybuild/prompts/` + SessionName(session) + `.txt)"`
 		}
+		line := prep + `line=` + sshx.Quote("claude"+flags+first) + `;`
 		switch {
 		case sessionID.MatchString(o.Resume) && o.Resume != "continue":
 			// The conversation this session had, when its transcript is on this machine.
 			// No transcript means that Claude never had a conversation: it starts afresh (the
 			// latest conversation in the folder could be another session's).
-			line = `if ls "$HOME"/.claude/projects/*/` + sshx.Quote(o.Resume+".jsonl") + ` >/dev/null 2>&1; then line=` + sshx.Quote("claude --resume "+o.Resume+flags) + `; else line=` + sshx.Quote("claude"+flags) + `; fi;`
+			line = prep + `if ls "$HOME"/.claude/projects/*/` + sshx.Quote(o.Resume+".jsonl") + ` >/dev/null 2>&1; then line=` + sshx.Quote("claude --resume "+o.Resume+flags+first) + `; else line=` + sshx.Quote("claude"+flags+first) + `; fi;`
 		case o.Resume != "":
 			line = `line=` + sshx.Quote("claude --continue"+flags) + `;`
 		}

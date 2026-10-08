@@ -654,6 +654,40 @@ select:focus-visible {
     transform: none;
   }
 }
+/* A session on its way to another device (lib/move): a line sweeping along, a cloud rising. */
+@keyframes sky-sweep {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(250%);
+  }
+}
+.sky-sweep {
+  animation: sky-sweep 1.15s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+@keyframes sky-lift {
+  0%,
+  100% {
+    transform: translateY(1px);
+    opacity: 0.85;
+  }
+  50% {
+    transform: translateY(-2px);
+    opacity: 1;
+  }
+}
+.sky-lift {
+  animation: sky-lift 1.6s ease-in-out infinite;
+}
+
+/* A window that can't be seen keeps its picture but stops animating (lib/shown.ts). */
+:root[data-covered] *,
+:root[data-covered] *::before,
+:root[data-covered] *::after {
+  animation-play-state: paused !important;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .wl-rise,
   .wl-pop,

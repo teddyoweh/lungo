@@ -83,12 +83,21 @@ export function ContextMenuHost() {
 function MenuAt({ x, y, rows }: { x: number; y: number; rows: MenuRow[] }) {
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({ left: x, top: y, ready: false });
-  // Keep it on screen: flip to the other side of the pointer near an edge.
+  // Keep it on screen: flip to the other side of the pointer near an edge. The page is zoomed
+  // (.z), and engines differ on whether that scales left/top: measure where two positions
+  // land instead of assuming (as Menu does).
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const r = el.getBoundingClientRect();
-    setPos({ left: x + r.width > window.innerWidth - 8 ? Math.max(8, x - r.width) : x, top: y + r.height > window.innerHeight - 8 ? Math.max(8, y - r.height) : y, ready: true });
+    el.style.left = el.style.top = "0px";
+    const a = el.getBoundingClientRect();
+    el.style.left = el.style.top = "100px";
+    const b = el.getBoundingClientRect();
+    const kx = (b.left - a.left) / 100 || 1;
+    const ky = (b.top - a.top) / 100 || 1;
+    const left = x + a.width > window.innerWidth - 8 ? Math.max(8, x - a.width) : x;
+    const top = y + a.height > window.innerHeight - 8 ? Math.max(8, y - a.height) : y;
+    setPos({ left: (left - a.left) / kx, top: (top - a.top) / ky, ready: true });
   }, [x, y]);
   useEffect(() => {
     const down = (e: MouseEvent) => {

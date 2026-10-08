@@ -490,7 +490,7 @@ export function Menu({ trigger, items, align = "right", side = "bottom" }: { tri
       {open && (
         <div
           className={cx(
-            "anim-in absolute z-30 min-w-[200px] rounded-xl border border-line-strong bg-raised p-1 shadow-pop",
+            "anim-in absolute z-30 max-w-[340px] min-w-[200px] rounded-xl border border-line-strong bg-raised p-1 shadow-pop",
             side === "top" ? "bottom-full mb-1" : "top-full mt-1",
             align === "right" ? "right-0" : "left-0",
           )}
@@ -512,9 +512,12 @@ export function Menu({ trigger, items, align = "right", side = "bottom" }: { tri
                   it.danger ? "text-bad hover:bg-[color-mix(in_srgb,var(--red)_12%,transparent)]" : "text-fg hover:bg-hover",
                 )}
               >
-                <span className="flex w-4 justify-center text-subtle">{it.icon}</span>
-                <span className="flex-1">{it.label}</span>
-                {it.hint && <span className="text-[11px] text-subtle">{it.hint}</span>}
+                <span className="flex w-4 shrink-0 justify-center text-subtle">{it.icon}</span>
+                {/* One line each: a long name (a session's task) is cut short, not wrapped over the next row. */}
+                <span className="min-w-0 flex-1 truncate" title={it.label}>
+                  {it.label}
+                </span>
+                {it.hint && <span className="shrink-0 text-[11px] text-subtle">{it.hint}</span>}
               </button>
             ),
           )}

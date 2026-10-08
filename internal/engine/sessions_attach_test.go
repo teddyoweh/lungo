@@ -64,7 +64,15 @@ func TestAttachScript(t *testing.T) {
 		}
 	}
 	if again := attachScript("claude-api", AttachOptions{Dir: "/srv/api", Resume: "continue", Prompt: "hello"}); strings.Contains(again, "prompts") {
-		t.Errorf("a resumed session takes no first message:\n%s", again)
+		t.Errorf("the latest conversation picked up takes no message:\n%s", again)
+	}
+	// A conversation picked up by its ID takes one (a session moved here mid-work goes on), and
+	// so does the fresh Claude started when its transcript isn't here.
+	moved := attachScript("claude-api", AttachOptions{Dir: "/srv/api", Resume: "0b9d7c1e-5a42-4c8e-9a51-2f6f0c7d1e11", Prompt: "you moved"})
+	for _, want := range []string{`printf '%s' 'you moved' > "$HOME"/.skybuild/prompts/'claude-api.txt'; if ls`, `then line='claude --resume 0b9d7c1e-5a42-4c8e-9a51-2f6f0c7d1e11 "$(cat ~/.skybuild/prompts/claude-api.txt)"'; else line='claude "$(cat ~/.skybuild/prompts/claude-api.txt)"'; fi;`} {
+		if !strings.Contains(moved, want) {
+			t.Errorf("resume with a message misses %q:\n%s", want, moved)
+		}
 	}
 	cmd := attachScript("shell-ab12", AttachOptions{Dir: "/srv/api", Run: "npm run dev\nrm -rf /"})
 	if !strings.Contains(cmd, `line='npm run dev'; tmux new-session`) || !strings.Contains(cmd, `else tmux send-keys -t "=$s:" "$line" Enter; fi; fi; exec tmux -u attach`) || strings.Contains(cmd, "rm -rf") {

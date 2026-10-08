@@ -103,7 +103,8 @@ export function isNativeWebview(): boolean {
 
 export function tildePath(p: string, home?: string): string {
   if (!p) return p;
-  if (home && p.startsWith(home)) return "~" + p.slice(home.length);
+  // A whole folder name: /Users/teddyoweh (the mini) isn't inside /Users/teddy (this Mac).
+  if (home && (p === home || p.startsWith(home.replace(/\/$/, "") + "/"))) return "~" + p.slice(home.replace(/\/$/, "").length);
   return p.replace(/^\/home\/[^/]+/, "~").replace(/^\/Users\/[^/]+/, "~");
 }
 

@@ -11,6 +11,8 @@ import (
 
 func compactTitleBar() {}
 
+func keepDrawn() {}
+
 func backgroundApp() {}
 
 func debugKey(string, string, string, int, []string) {}

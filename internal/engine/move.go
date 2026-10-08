@@ -303,6 +303,33 @@ func (e *Engine) MoveFolder(ctx context.Context, from, to, dir string, r events.
 	if err != nil {
 		return MoveResult{}, err
 	}
+	return e.send(ctx, plan, r)
+}
+
+// MoveSession moves a session to another device: once both devices have answered, the
+// session stops where it is (so nothing more is written there, and its conversation is
+// complete), then its folder and conversations go over as MoveFolder sends them. The
+// conversation is picked up there by its ID. If the send fails, the folder and conversations
+// are still where they were, so the session can be picked up again there.
+func (e *Engine) MoveSession(ctx context.Context, from, session, to, dir string, r events.Reporter) (MoveResult, error) {
+	events.Stepf(r, "Getting %s ready", machineLabel(to))
+	plan, err := e.PlanMove(ctx, from, to, dir)
+	if err != nil {
+		return MoveResult{}, err
+	}
+	if session != "" {
+		events.Stepf(r, "Stopping it on %s", machineLabel(from))
+		if err := e.KillSession(ctx, from, session); err != nil {
+			return MoveResult{}, err
+		}
+	}
+	return e.send(ctx, plan, r)
+}
+
+// send does what plan says: the folder, then the Claude conversations that ran in it.
+func (e *Engine) send(ctx context.Context, plan MovePlan, r events.Reporter) (MoveResult, error) {
+	from, to := plan.From, plan.To
+	var err error
 	res := MoveResult{MovePlan: plan}
 	parentFrom, parentTo := path.Dir(plan.FromDir), path.Dir(plan.ToDir)
 

@@ -1244,6 +1244,40 @@ export function retryNow(key: string) {
   updateTab(key, { termId: undefined, url: undefined, exited: false, error: undefined, spawn: respawn(t), retry: { n: 1, at: Date.now() + 150, why: t.retry?.why } });
 }
 
+/**
+ * Points a pane at a Claude session on machine, in dir, where the pane is: the same place in
+ * the same tab. It is what a session moved to another device goes on in (see lib/move): a
+ * new session there, picking resume up (with prompt as its next message). The pane's old
+ * session is gone already; the pane starts over as one that never attached.
+ */
+export function movePaneTo(key: string, machine: string, dir: string, resume?: string, prompt?: string) {
+  const t = state.tabs.find((x) => x.key === key);
+  if (!t) return;
+  if (t.termId) api.closeTerminal(t.termId).catch(() => {});
+  aliveAt.delete(key); // not a session last seen a moment ago (that would read as ended on purpose)
+  everAttached.delete(key);
+  attachedAt.delete(key);
+  const local = machine === LOCAL;
+  const session = local && !state.localTmux ? undefined : freeSessionName(machine, claudeSessionName(dir));
+  updateTab(key, {
+    kind: local ? "local" : "session",
+    machine: local ? undefined : machine,
+    session,
+    title: session ?? "local",
+    cwd: dir,
+    running: undefined,
+    claude: true,
+    agent: undefined,
+    sid: sessionIdOf(resume),
+    spawn: { dir, claude: true, flags: t.flags, resume, prompt },
+    termId: undefined,
+    url: undefined,
+    exited: false,
+    error: undefined,
+    retry: { n: 1, at: Date.now() }, // attach now
+  });
+}
+
 export function reattachTab(key: string) {
   const t = state.tabs.find((x) => x.key === key);
   if (!t) return;

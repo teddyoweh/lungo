@@ -38,6 +38,7 @@ import {
 import { dragSizes, isLeaf, node, type Divider, type Rect } from "../lib/panes";
 import { agentOf, cx, hasAgent, mod } from "../lib/util";
 import { TerminalView } from "./Terminal";
+import { MoveButton } from "./MoveButton";
 import { Menu } from "./ui";
 import { AgentIcon, BrandIcon, LocalIcon, ProviderIcon, SessionIcon } from "./Brand";
 
@@ -114,6 +115,7 @@ function PaneHeader({ tab, focused, session }: { tab: Tab; focused: boolean; ses
           </span>
         )}
       </span>
+      <MoveButton tab={tab} session={session} />
       <PaneMenu tab={tab} />
       <button
         title={`Close pane (${mod}W)`}

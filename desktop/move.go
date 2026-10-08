@@ -137,6 +137,24 @@ func (a *App) MoveFolder(from, to, dir string) string {
 	})
 }
 
+// MoveSession moves the session in a pane to another device as an operation (see
+// engine.MoveSession): it stops where it is, its folder and conversations go over, and the
+// pane picks the conversation up there. The result is the engine.MoveResult.
+func (a *App) MoveSession(from, session, to, dir string) string {
+	where := to
+	if engine.IsLocal(to) {
+		where = "this computer"
+	}
+	return a.ops.start("move", "Move "+path.Base(dir)+" to "+where, to, func(ctx context.Context, r events.Reporter) (any, error) {
+		res, err := a.eng.MoveSession(ctx, from, session, to, dir, r)
+		go a.refreshSessions(from)
+		if err != nil {
+			return nil, err
+		}
+		return res, nil
+	})
+}
+
 // AgentsOn lists the coding agents installed on a machine ("@local": this computer), for
 // the new-session dialog to offer.
 func (a *App) AgentsOn(machine string) []string {

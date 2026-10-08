@@ -35,6 +35,8 @@ import { cx, isMac } from "../lib/util";
 import { senders, terminals } from "../lib/terminals";
 import { showMenu, type MenuRow } from "./ContextMenu";
 import { KNOWN_EXTENSIONS, filesOf, peekByName } from "../lib/peek";
+import { arrived, holdsOff, useMoving } from "../lib/move";
+import { MoveOverlay } from "./MoveButton";
 
 function currentTheme(): ITheme {
   return activeSkin().term;
@@ -704,7 +706,7 @@ export const TerminalView = memo(function TerminalView({ tab, active, focused }:
 
   async function openBackend() {
     const tb = tabRef.current;
-    if (tb.termId || opening.current) return;
+    if (tb.termId || opening.current || holdsOff(tb.key)) return; // a session moving: it attaches once it is there
     opening.current = true;
     const t = term.current!;
     try {
@@ -875,6 +877,7 @@ export const TerminalView = memo(function TerminalView({ tab, active, focused }:
           t.write(data.subarray(at));
           setSeen(true);
           paneAttached(key);
+          arrived(key);
           return;
         }
         // ssh's parting words when a connection breaks would land in the middle of the frozen screen.
@@ -1041,10 +1044,12 @@ export const TerminalView = memo(function TerminalView({ tab, active, focused }:
   const quiet = waiting && seen && !late; // just reconnecting, or just opened from its last screen: no notice yet
   const why = shortWhy(tab.retry?.why);
   const stuck = !!tab.retry && tab.retry.n > 2; // not a blip any more: say why, offer a retry
+  const move = useMoving(tab.key); // the session is on its way to another device: that says so instead
   return (
     <div className="absolute inset-0" style={{ background: "var(--term-bg)" }}>
-      <div ref={host} onContextMenu={terminalMenu} className={cx("term-host absolute inset-0 transition-opacity duration-300", waiting && seen && !quiet && "opacity-50")} />
-      {waiting && !seen && (
+      <div ref={host} onContextMenu={terminalMenu} className={cx("term-host absolute inset-0 transition-opacity duration-300", move ? "opacity-30" : waiting && seen && !quiet && "opacity-50")} />
+      {move && <MoveOverlay move={move} />}
+      {waiting && !seen && !move && (
         <div className="z absolute inset-0 flex flex-col items-center justify-center gap-2 text-[12.5px] text-subtle">
           <div className="flex items-center gap-2">
             <Spinner /> Connecting to {where}…
@@ -1063,7 +1068,7 @@ export const TerminalView = memo(function TerminalView({ tab, active, focused }:
           )}
         </div>
       )}
-      {waiting && seen && !quiet && (
+      {waiting && seen && !quiet && !move && (
         <div className="z anim-fade pointer-events-none absolute inset-x-0 bottom-3 z-20 flex justify-center px-3">
           <div className="pointer-events-auto flex max-w-full items-center gap-2 rounded-full border border-line-strong bg-[color-mix(in_srgb,var(--raised)_94%,transparent)] py-1.5 pr-3.5 pl-3 text-[11.5px] text-muted shadow-pop backdrop-blur">
             <Spinner size={12} />
