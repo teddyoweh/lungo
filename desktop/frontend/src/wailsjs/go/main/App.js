@@ -10,8 +10,8 @@ export function APIProviders() {
   return window['go']['main']['App']['APIProviders']();
 }
 
-export function AddClaudeAccount(arg1, arg2) {
-  return window['go']['main']['App']['AddClaudeAccount'](arg1, arg2);
+export function AddClaudeAccount(arg1, arg2, arg3) {
+  return window['go']['main']['App']['AddClaudeAccount'](arg1, arg2, arg3);
 }
 
 export function AddLink(arg1) {
@@ -50,6 +50,10 @@ export function CheckForUpdates() {
   return window['go']['main']['App']['CheckForUpdates']();
 }
 
+export function ClaudeAccountToken(arg1) {
+  return window['go']['main']['App']['ClaudeAccountToken'](arg1);
+}
+
 export function ClaudeAccounts() {
   return window['go']['main']['App']['ClaudeAccounts']();
 }
@@ -68,6 +72,14 @@ export function ClaudePreciseScroll() {
 
 export function ClaudeStatus() {
   return window['go']['main']['App']['ClaudeStatus']();
+}
+
+export function ClaudeLocalLogin() {
+  return window['go']['main']['App']['ClaudeLocalLogin']();
+}
+
+export function ClaudeSource() {
+  return window['go']['main']['App']['ClaudeSource']();
 }
 
 export function ClaudeStrategy() {
@@ -96,6 +108,10 @@ export function CloseTunnel(arg1) {
 
 export function Connect(arg1) {
   return window['go']['main']['App']['Connect'](arg1);
+}
+
+export function CopyClaudeAccountToken(arg1) {
+  return window['go']['main']['App']['CopyClaudeAccountToken'](arg1);
 }
 
 export function CopyText(arg1) {
@@ -464,6 +480,10 @@ export function SetClaudeMoveSessions(arg1) {
 
 export function SetClaudePreciseScroll(arg1) {
   return window['go']['main']['App']['SetClaudePreciseScroll'](arg1);
+}
+
+export function SetClaudeSource(arg1) {
+  return window['go']['main']['App']['SetClaudeSource'](arg1);
 }
 
 export function SetClaudeStrategy(arg1) {

@@ -49,6 +49,7 @@ type poller struct {
 	localSince  atomic.Int64
 	anchored    atomic.Bool // the sessions here answer to this app for folder access
 	watching    atomic.Bool // tmux tells this window about changes here (see watchLocal)
+	following   atomic.Bool // acting on a /login here (see FollowLocalLogin)
 	nudged      atomic.Bool // a refresh asked for by tmux is waiting to run
 	lastLocal   atomic.Int64
 }
@@ -142,6 +143,21 @@ func (p *poller) run(ctx context.Context) {
 			// The accounts or the machines changed somewhere else (another window's refresh,
 			// the background agent switched accounts, a usage check came in, the CLI): show
 			// it now.
+			// A /login in any Claude here: follow it now rather than at the next rotation pass.
+			if p.primary() && engine.LocalLoginChanged() && !p.following.Swap(true) {
+				go func() {
+					defer p.following.Store(false)
+					c, cancel := context.WithTimeout(ctx, 3*time.Minute)
+					defer cancel()
+					if to, err := p.a.eng.FollowLocalLogin(c, nil); err == nil && to != "" {
+						p.a.announceFollow(to)
+					}
+					if acct := p.a.eng.LoginToAdd(); acct != nil {
+						p.a.addLoginAccount(acct)
+					}
+					p.a.emitClaude()
+				}()
+			}
 			if st := accountFilesStamp(); st != accountsSeen {
 				accountsSeen = st
 				p.a.emitClaude()
@@ -161,14 +177,6 @@ func (p *poller) run(ctx context.Context) {
 			}
 		}
 	}
-}
-
-// sessions returns the machines' sessions as last polled (not this computer's: account
-// rotation and limits are about the machines).
-func (p *poller) sessions() []engine.Session {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.remoteList()
 }
 
 // remoteList is every machine's sessions, newest first. Call with p.mu held.
@@ -366,9 +374,15 @@ func (p *poller) follow(ctx context.Context) {
 func (p *poller) claude(ctx context.Context) {
 	c, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
-	res, err := p.a.eng.ClaudeTick(c, p.sessions(), nil)
+	res, err := p.a.eng.ClaudeTick(c, p.publishedSessions(), nil)
 	if err != nil {
 		return
+	}
+	if res.Followed != "" {
+		p.a.announceFollow(res.Followed)
+	}
+	if acct := p.a.eng.LoginToAdd(); acct != nil { // the rotation pass saw the /login first
+		p.a.addLoginAccount(acct)
 	}
 	if res.Switched {
 		p.a.announceSwitch(res)
@@ -433,17 +447,17 @@ func (p *poller) refresh(ctx context.Context) SessionsView {
 	for k, v := range p.remoteErr {
 		errs[k] = v
 	}
-	list := p.remoteList()
 	p.mu.Unlock()
 	p.a.eng.TendTerminals(ctx, errs) // keep each machine ready for a pane to open instantly
 	if p.primary() {
-		go p.relogin(ctx, list)
+		go p.relogin(ctx, p.publishedSessions()) // this computer's sessions too
 	}
 	return p.current()
 }
 
 // relogin moves sessions still on a login the machines have switched off (an account at its
-// limit) onto the current one, with their conversations, as soon as each is idle.
+// limit) onto the current one, with their conversations, as soon as each is idle. Sessions
+// on this computer follow the machines' account too.
 func (p *poller) relogin(ctx context.Context, list []engine.Session) {
 	due := false
 	for _, s := range list {

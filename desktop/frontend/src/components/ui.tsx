@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useSyncExternalStore, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode } from "react";
 import { Check, ChevronDown, Copy, Loader2, X } from "lucide-react";
 import { api } from "../lib/api";
 import { toast, toggleSidebar, useStore } from "../lib/store";
@@ -463,10 +463,16 @@ export function Sheet({ open, onClose, children, width = 460 }: { open: boolean;
   );
 }
 
-/** A small dropdown menu anchored to its trigger. */
+/**
+ * A small dropdown menu anchored to its trigger. It is placed against the window, not its
+ * container, so a list with rounded corners (overflow hidden) doesn't cut it off: below the
+ * trigger, or above it when there's more room there, and always on screen.
+ */
 export function Menu({ trigger, items, align = "right", side = "bottom" }: { trigger: ReactNode; items: (MenuItem | "sep")[]; align?: "left" | "right"; side?: "bottom" | "top" }) {
   const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
   const ref = useRef<HTMLDivElement>(null);
+  const pop = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
     const h = (e: MouseEvent) => {
@@ -477,23 +483,55 @@ export function Menu({ trigger, items, align = "right", side = "bottom" }: { tri
       e.stopPropagation();
       setOpen(false);
     };
+    // It stays where it was put: scrolling what holds the trigger, or resizing, closes it.
+    const scroll = (e: Event) => {
+      if (e.target instanceof Node && ref.current && e.target.contains(ref.current)) setOpen(false);
+    };
+    const resize = () => setOpen(false);
     window.addEventListener("mousedown", h);
     window.addEventListener("keydown", k, true);
+    window.addEventListener("scroll", scroll, true);
+    window.addEventListener("resize", resize);
     return () => {
       window.removeEventListener("mousedown", h);
       window.removeEventListener("keydown", k, true);
+      window.removeEventListener("scroll", scroll, true);
+      window.removeEventListener("resize", resize);
     };
   }, [open]);
+  useLayoutEffect(() => {
+    if (!open) {
+      setPos(null);
+      return;
+    }
+    const el = pop.current;
+    const t = ref.current?.getBoundingClientRect();
+    if (!el || !t) return;
+    // The page is zoomed (.z), and engines differ on whether that scales left/top: measure
+    // where two positions land instead of assuming.
+    el.style.left = el.style.top = "0px";
+    const a = el.getBoundingClientRect();
+    el.style.left = el.style.top = "100px";
+    const b = el.getBoundingClientRect();
+    const kx = (b.left - a.left) / 100 || 1;
+    const ky = (b.top - a.top) / 100 || 1;
+    const w = window.innerWidth;
+    const hgt = window.innerHeight;
+    const x = Math.max(8, Math.min(align === "right" ? t.right - a.width : t.left, w - 8 - a.width));
+    const below = hgt - t.bottom - 12;
+    const above = t.top - 12;
+    const up = side === "top" ? above >= a.height || above > below : below < a.height && above > below;
+    const y = Math.max(8, Math.min(up ? t.top - 4 - a.height : t.bottom + 4, hgt - 8 - a.height));
+    setPos({ left: (x - a.left) / kx, top: (y - a.top) / ky });
+  }, [open, side, align]);
   return (
     <div className="relative" ref={ref}>
       <div onClick={() => setOpen((o) => !o)}>{trigger}</div>
       {open && (
         <div
-          className={cx(
-            "anim-in absolute z-30 max-w-[340px] min-w-[200px] rounded-xl border border-line-strong bg-raised p-1 shadow-pop",
-            side === "top" ? "bottom-full mb-1" : "top-full mt-1",
-            align === "right" ? "right-0" : "left-0",
-          )}
+          ref={pop}
+          style={pos ?? undefined}
+          className={cx("fixed z-[80] max-w-[340px] min-w-[200px] rounded-xl border border-line-strong bg-raised p-1 shadow-pop", pos ? "anim-in" : "invisible")}
         >
           {items.map((it, i) =>
             it === "sep" ? (

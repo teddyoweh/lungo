@@ -1,8 +1,8 @@
 // The Claude account pool: who machines sign in as, who is up next, how much of each usage
 // window is left, and adding accounts (browser sign-in or a pasted `claude setup-token` token).
 import { useEffect, useState } from "react";
-import { ArrowDown, ArrowUp, Check, Globe, KeyRound, MoreHorizontal, Pencil, Plus, Power, RefreshCw, Trash2 } from "lucide-react";
-import { api, errText, type ClaudeAccountView, type ClaudeStatus, type UsageWindow } from "../lib/api";
+import { ArrowDown, ArrowUp, Check, Copy, Eye, Globe, KeyRound, MoreHorizontal, Pencil, Plus, Power, RefreshCw, Trash2 } from "lucide-react";
+import { api, errText, type ClaudeAccountView, type ClaudeStatus, type LocalLogin, type UsageWindow } from "../lib/api";
 import { getState, runOp, setState, toast, useStore } from "../lib/store";
 import { ago, cx } from "../lib/util";
 import { Button, Field, IconButton, Input, Menu, Modal, ModalHeader, Segmented, Spinner, Toggle, useNow, GROUP, GROUP_ROW } from "./ui";
@@ -31,6 +31,9 @@ export function when(iso: string | undefined, now: number): string {
   if (mins < 24 * 60) return `in ${Math.floor(mins / 60)}h ${mins % 60}m`;
   return new Date(t).toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" });
 }
+
+/** The token works, but the account's organization doesn't let subscriptions use Claude Code. */
+const orgBlocked = (v: ClaudeAccountView) => v.status.state === "invalid" && /organization has disabled/i.test(v.status.message ?? "");
 
 const limitedNow = (v: ClaudeAccountView, now: number) => v.status.state === "limited" && !!v.status.resetsAt && new Date(v.status.resetsAt).getTime() > now;
 
@@ -63,6 +66,7 @@ function Role({ v, now }: { v: ClaudeAccountView; now: number }) {
   const limited = limitedNow(v, now);
   if (v.account.disabled) return pill("bg-active text-subtle", "bg-subtle", "Off");
   if (!v.hasToken) return pill("bg-[color-mix(in_srgb,var(--red)_12%,transparent)] text-bad", "bg-bad", "No token");
+  if (orgBlocked(v)) return pill("bg-active text-muted", "bg-bad", "Turned off by its org", `${v.status.message} Signing in again won't change this; an admin of that organization can.`);
   if (v.status.state === "invalid") return pill("bg-[color-mix(in_srgb,var(--red)_12%,transparent)] text-bad", "bg-bad", "Token rejected", v.status.message);
   if (limited) return pill("bg-[color-mix(in_srgb,var(--amber)_13%,transparent)] text-warn", "bg-warn", `Limited · back ${when(v.status.resetsAt, now)}`);
   if (v.active) return pill("bg-[color-mix(in_srgb,var(--green)_13%,transparent)] text-ok", "bg-ok", "In use");
@@ -80,18 +84,30 @@ export function ClaudeAccountsSection() {
   const [move, setMove] = useState(true);
   const onOld = useStore((s) => s.sessions.sessions.filter((x) => x.oldLogin && x.claude).length);
   const [strategy, setStrategy] = useState<"smart" | "order">("smart");
+  const [source, setSource] = useState<"pool" | "login">("pool");
+  const [localLogin, setLocalLogin] = useState<LocalLogin | null>(null);
   const [adding, setAdding] = useState(false);
   const [renaming, setRenaming] = useState<ClaudeAccountView | null>(null);
   const [removing, setRemoving] = useState<ClaudeAccountView | null>(null);
+  const [showing, setShowing] = useState<ClaudeAccountView | null>(null);
   useEffect(() => {
     api.claudeAutoSwitch().then(setAuto).catch(() => setAuto(true));
     api.claudeMoveSessions().then(setMove).catch(() => {});
     api.claudeStrategy().then(setStrategy).catch(() => {});
+    api.claudeSource().then(setSource).catch(() => {});
   }, []);
+  // Who this Mac's Claude Code is signed in to changes with /login; the list is sent again then.
+  useEffect(() => {
+    api.claudeLocalLogin().then(setLocalLogin).catch(() => setLocalLogin(null));
+    api.claudeSource().then(setSource).catch(() => {});
+  }, [accounts]);
+  const follow = source === "login";
+  const localNew = !!localLogin?.email && !localLogin.accountId;
   const smart = strategy === "smart";
   const autoOn = auto ?? true;
   const suggested = list0(accounts).find((v) => v.suggest);
   const checking = opOrder.some((id) => ops[id]?.info.running && ops[id]?.info.kind === "claude-check");
+  const addingNow = opOrder.some((id) => ops[id]?.info.running && ops[id]?.info.kind === "claude-account");
   const list = accounts ?? [];
   const active = list.find((v) => v.active);
   const next = list.find((v) => v.next);
@@ -103,14 +119,24 @@ export function ClaudeAccountsSection() {
   const act = (p: Promise<unknown>) => p.then(reload).catch((e) => toast("error", "Couldn't update", errText(e)));
 
   let summary: React.ReactNode = null;
-  if (active) {
+  if (active && follow) {
+    const name = <b className="font-medium text-fg">{active.account.label || active.account.email}</b>;
+    const mac = localLogin?.email ? <b className="font-medium text-fg">{localLogin.email}</b> : "this Mac's login";
+    summary = localNew ? (
+      <>
+        Sessions here use {mac}, the account Claude Code on this Mac is signed in to. Machines stay on {name} until you add it.
+      </>
+    ) : (
+      <>Sessions here and on machines use {mac}, the account Claude Code on this Mac is signed in to. /login in any session switches all of them.</>
+    );
+  } else if (active) {
     const name = <b className="font-medium text-fg">{active.account.label || active.account.email}</b>;
     if (allLimited) summary = <>Every account is at its limit{firstReset ? <>; the first is back {when(firstReset, now)}</> : null}. Add another to keep machines working.</>;
     else if (limitedNow(active, now)) summary = <>{name} is at its limit{next ? <>; machines are moving to <b className="font-medium text-fg">{next.account.label}</b></> : null}.</>;
-    else if (next && smart) summary = <>Machines use {name}: {lower(active.reason)}. Next in line is <b className="font-medium text-fg">{next.account.label}</b>.</>;
-    else if (next) summary = <>Machines use {name}. If it hits a limit they move to <b className="font-medium text-fg">{next.account.label}</b> and stuck sessions resume.</>;
-    else if (list.length > 1) summary = <>Machines use {name}. {list.length === 2 ? "The other account is" : "The others are"} at the limit{firstReset ? <>, back {when(firstReset, now)}</> : null}.</>;
-    else summary = <>Machines use {name}. Add a second account and they'll switch to it when this one hits a limit.</>;
+    else if (next && smart) summary = <>Sessions use {name}: {lower(active.reason)}. Next in line is <b className="font-medium text-fg">{next.account.label}</b>.</>;
+    else if (next) summary = <>Sessions use {name}. If it hits a limit they move to <b className="font-medium text-fg">{next.account.label}</b> and stuck sessions resume.</>;
+    else if (list.length > 1) summary = <>Sessions use {name}. {list.length === 2 ? "The other account is" : "The others are"} at the limit{firstReset ? <>, back {when(firstReset, now)}</> : null}.</>;
+    else summary = <>Sessions use {name}. Add a second account and they'll switch to it when this one hits a limit.</>;
     if (onOld > 0)
       summary = (
         <>
@@ -125,29 +151,55 @@ export function ClaudeAccountsSection() {
       <div className="mb-2 flex items-center justify-between gap-4">
         <h2 className="text-[11px] font-semibold tracking-[0.06em] text-subtle uppercase">Claude</h2>
         <div className="flex items-center gap-1">
-          <span className="mr-2" title="Smart: use whichever account has the most allowance about to expire, so nothing goes to waste. My order: use them top to bottom.">
+          <span
+            className="mr-2"
+            title="Rotation: sessions sign in with the accounts below, each signed in once, and switch when one hits a limit. This Mac's login: sessions use whatever account Claude Code on this Mac is signed in to; /login in any session switches them all."
+          >
             <Segmented
-              value={strategy}
+              value={source}
               onChange={(v) => {
-                setStrategy(v);
-                api.setClaudeStrategy(v).then(reload).catch((e) => toast("error", "Couldn't save", errText(e)));
+                setSource(v);
+                api
+                  .setClaudeSource(v)
+                  .then(reload)
+                  .catch((e) => {
+                    setSource(v === "login" ? "pool" : "login");
+                    toast("error", "Couldn't save", errText(e));
+                  });
               }}
               options={[
-                { value: "smart", label: "Smart" },
-                { value: "order", label: "My order" },
+                { value: "pool", label: "Rotation" },
+                { value: "login", label: "This Mac's login" },
               ]}
             />
           </span>
-          <label className="mr-2 flex items-center gap-2 text-[12px] text-muted" title="Move machines to the best account automatically, and resume sessions stuck on a limit">
-            Auto-switch
-            <Toggle
-              checked={auto ?? true}
-              onChange={(on) => {
-                setAuto(on);
-                api.setClaudeAutoSwitch(on).catch((e) => toast("error", "Couldn't save", errText(e)));
-              }}
-            />
-          </label>
+          {!follow && (
+            <span className="mr-2" title="Smart: use whichever account has the most allowance about to expire, so nothing goes to waste. My order: use them top to bottom.">
+              <Segmented
+                value={strategy}
+                onChange={(v) => {
+                  setStrategy(v);
+                  api.setClaudeStrategy(v).then(reload).catch((e) => toast("error", "Couldn't save", errText(e)));
+                }}
+                options={[
+                  { value: "smart", label: "Smart" },
+                  { value: "order", label: "My order" },
+                ]}
+              />
+            </span>
+          )}
+          {!follow && (
+            <label className="mr-2 flex items-center gap-2 text-[12px] text-muted" title="Move machines to the best account automatically, and resume sessions stuck on a limit">
+              Auto-switch
+              <Toggle
+                checked={auto ?? true}
+                onChange={(on) => {
+                  setAuto(on);
+                  api.setClaudeAutoSwitch(on).catch((e) => toast("error", "Couldn't save", errText(e)));
+                }}
+              />
+            </label>
+          )}
           <label
             className="mr-2 flex items-center gap-2 text-[12px] text-muted"
             title="Claude reads its login when it starts. With this on, sessions already running move to the new account too: each is restarted with its conversation the moment it is idle (never while it works or while you type)."
@@ -185,7 +237,7 @@ export function ClaudeAccountsSection() {
             </span>
             <span>
               <span className="block text-[13px] font-medium text-fg">Add your Claude account</span>
-              <span className="block text-[12px] text-subtle">Machines sign in with it. Add more than one and they switch when one hits a limit.</span>
+              <span className="block text-[12px] text-subtle">Sessions here and on machines sign in with it. Add more than one and they switch when one hits a limit.</span>
             </span>
           </button>
         ) : (
@@ -193,7 +245,17 @@ export function ClaudeAccountsSection() {
             {summary && (
               <div className={cx("px-4 py-2.5 text-[12px] leading-relaxed", allLimited ? "bg-[color-mix(in_srgb,var(--red)_7%,transparent)] text-bad" : "text-muted")}>{summary}</div>
             )}
-            {suggested && !autoOn && (
+            {localNew && !addingNow && (
+              <div className="flex items-center gap-3 bg-accent-soft px-4 py-2 text-[12px] text-fg">
+                <span className="min-w-0 flex-1">
+                  Claude Code on this Mac is signed in to <b className="font-medium">{localLogin!.email}</b>, which isn't in this list. Add it once (one approval in your browser) and sessions can switch to it without signing in again.
+                </span>
+                <Button size="xs" variant="primary" onClick={() => setAdding(true)}>
+                  Add
+                </Button>
+              </div>
+            )}
+            {suggested && !autoOn && !follow && (
               <div className="flex items-center gap-3 bg-accent-soft px-4 py-2 text-[12px] text-fg">
                 <span className="min-w-0 flex-1">
                   Suggested: move machines to <b className="font-medium">{suggested.account.label || suggested.account.email}</b> ({lower(suggested.reason)}).
@@ -235,8 +297,11 @@ export function ClaudeAccountsSection() {
                       </IconButton>
                     }
                     items={[
-                      { label: "Use for machines now", icon: <Check size={13} />, disabled: v.active || v.account.disabled || !v.hasToken, onClick: () => runOp(api.useClaudeAccount(v.account.id)) },
+                      { label: "Use now", icon: <Check size={13} />, hint: follow ? "turns on rotation" : undefined, disabled: (v.active && !follow) || v.account.disabled || !v.hasToken, onClick: () => runOp(api.useClaudeAccount(v.account.id)) },
                       { label: "Check usage", icon: <RefreshCw size={13} />, onClick: () => runOp(api.checkClaudeAccounts()) },
+                      "sep",
+                      { label: "Copy token", icon: <Copy size={13} />, disabled: !v.hasToken, onClick: () => copyToken(v) },
+                      { label: "Show token…", icon: <Eye size={13} />, disabled: !v.hasToken, onClick: () => setShowing(v) },
                       "sep",
                       ...(smart
                         ? []
@@ -259,9 +324,10 @@ export function ClaudeAccountsSection() {
 
       <AddClaudeAccount open={adding} onClose={() => setAdding(false)} />
       {renaming && <RenameAccount v={renaming} onClose={() => setRenaming(null)} />}
+      {showing && <ShowToken v={showing} onClose={() => setShowing(null)} />}
       {removing && (
         <Modal open onClose={() => setRemoving(null)} width={420}>
-          <ModalHeader title={`Remove ${removing.account.label || removing.account.email}?`} subtitle="Its token is deleted from your keychain. Machines move to another account on the next sync." onClose={() => setRemoving(null)} icon={<Trash2 size={15} />} />
+          <ModalHeader title={`Remove ${removing.account.label || removing.account.email}?`} subtitle="Its token is deleted from your keychain. Sessions move to another account on the next sync." onClose={() => setRemoving(null)} icon={<Trash2 size={15} />} />
           <div className="flex justify-end gap-2 px-5 py-4">
             <Button variant="ghost" onClick={() => setRemoving(null)}>
               Cancel
@@ -289,10 +355,12 @@ export function AddClaudeAccount({ open, onClose }: { open: boolean; onClose: ()
   const [label, setLabel] = useState("");
   const [token, setToken] = useState("");
   const [local, setLocal] = useState<ClaudeStatus | null>(null);
+  const [use, setUse] = useState(true);
   useEffect(() => {
     if (!open) return;
     setLabel("");
     setToken("");
+    setUse(true);
     api.claude().then(setLocal).catch(() => setLocal(null));
   }, [open]);
   const localIsNew = !!local?.signedIn && !!local.email && !accounts.some((a) => a.account.email === local.email);
@@ -301,12 +369,12 @@ export function AddClaudeAccount({ open, onClose }: { open: boolean; onClose: ()
       toast("error", "That isn't a Claude Code token", "Tokens start with sk-ant-oat01-. Make one with `claude setup-token`.");
       return;
     }
-    runOp(api.addClaudeAccount(label.trim(), mode === "token" ? token.trim() : ""));
+    runOp(api.addClaudeAccount(label.trim(), mode === "token" ? token.trim() : "", use));
     onClose();
   };
   return (
     <Modal open={open} onClose={onClose} width={480}>
-      <ModalHeader title="Add a Claude account" subtitle="Machines can switch to it when the one in use hits a limit." onClose={onClose} icon={<BrandIcon name="claude" size={16} />} />
+      <ModalHeader title="Add a Claude account" subtitle="Sessions can switch to it when the one in use hits a limit." onClose={onClose} icon={<BrandIcon name="claude" size={16} />} />
       <form
         className="flex flex-col gap-4 px-5 py-4"
         onSubmit={(e) => {
@@ -342,6 +410,13 @@ export function AddClaudeAccount({ open, onClose }: { open: boolean; onClose: ()
         <Field label="Name (optional)" hint="Left empty, it's named from the account when this Mac is signed in to it.">
           <Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder={localIsNew ? local!.email : "Work, Personal, team@company.com…"} />
         </Field>
+        <label className="flex items-center justify-between gap-3 text-[12.5px] text-fg">
+          <span>
+            Use it now
+            <span className="block text-[11.5px] text-subtle">Sessions here and on machines move to it as soon as it's added (running ones when idle).</span>
+          </span>
+          <Toggle checked={use} onChange={setUse} label="Use it now" />
+        </label>
         <div className="flex justify-end gap-2 pt-1">
           <Button variant="ghost" onClick={onClose}>
             Cancel
@@ -351,6 +426,45 @@ export function AddClaudeAccount({ open, onClose }: { open: boolean; onClose: ()
           </Button>
         </div>
       </form>
+    </Modal>
+  );
+}
+
+function copyToken(v: ClaudeAccountView) {
+  const name = v.account.label || v.account.email || "the account";
+  api
+    .copyClaudeAccountToken(v.account.id)
+    .then(() => toast("success", "Token copied", `${name}'s sk-ant-oat01-… token is on the clipboard.`))
+    .catch((err) => toast("error", "Couldn't copy the token", errText(err)));
+}
+
+/** An account's raw token, to read or copy. */
+function ShowToken({ v, onClose }: { v: ClaudeAccountView; onClose: () => void }) {
+  const [token, setToken] = useState<string | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    api.claudeAccountToken(v.account.id).then(setToken).catch((err) => setError(errText(err)));
+  }, [v.account.id]);
+  return (
+    <Modal open onClose={onClose} width={520}>
+      <ModalHeader title={`${v.account.label || v.account.email || "Claude account"} token`} subtitle="Anyone with it can use this account. Claude Code reads it from CLAUDE_CODE_OAUTH_TOKEN." onClose={onClose} icon={<KeyRound size={15} />} />
+      <div className="flex flex-col gap-3 px-5 py-4">
+        {error ? (
+          <div className="text-[12.5px] text-bad">{error}</div>
+        ) : token === null ? (
+          <Spinner />
+        ) : (
+          <code className="block rounded-[8px] bg-[color-mix(in_srgb,var(--fg)_6%,transparent)] px-3 py-2.5 font-mono text-[12px] leading-[18px] break-all text-fg select-all">{token}</code>
+        )}
+        <div className="flex justify-end gap-2">
+          <Button variant="ghost" onClick={onClose}>
+            Done
+          </Button>
+          <Button variant="primary" icon={<Copy size={13} />} disabled={!token} onClick={() => copyToken(v)}>
+            Copy
+          </Button>
+        </div>
+      </div>
     </Modal>
   );
 }
@@ -397,7 +511,7 @@ export function ActiveClaudeLine() {
   const next = accounts.find((a) => a.next);
   return (
     <span className="text-muted">
-      Machines sign in as <b className="font-medium text-fg">{active.account.label || active.account.email}</b>
+      Sessions sign in as <b className="font-medium text-fg">{active.account.label || active.account.email}</b>
       {limitedNow(active, now) ? (
         <span className="text-warn"> · at its limit, back {when(active.status.resetsAt, now)}</span>
       ) : (

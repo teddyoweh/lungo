@@ -123,7 +123,7 @@ func loginCmd() *cobra.Command {
 				line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
 				token = strings.TrimSpace(line)
 			}
-			return addClaudeAccount(ctx, name, token)
+			return addClaudeAccount(ctx, name, token, false)
 		},
 	}
 	c.Flags().StringVar(&token, "token", "", "paste a token from `claude setup-token` (- reads stdin)")
@@ -591,7 +591,7 @@ func appCmd() *cobra.Command {
 
 // ---------- Claude accounts ----------
 
-func addClaudeAccount(ctx context.Context, name, token string) error {
+func addClaudeAccount(ctx context.Context, name, token string, use bool) error {
 	if name == "" && isTTY() {
 		fmt.Fprint(os.Stderr, "Name for this Claude account (e.g. Work Max): ")
 		line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
@@ -601,7 +601,7 @@ func addClaudeAccount(ctx context.Context, name, token string) error {
 		fmt.Println(hint("  Your browser opens claude.ai. Make sure it's signed in as the account you're adding."))
 	}
 	return progress(func(r events.Reporter) error {
-		if _, err := eng.AddClaudeAccount(ctx, name, token, r); err != nil {
+		if _, err := eng.AddClaudeAccount(ctx, name, token, engine.AddOptions{Use: use}, r); err != nil {
 			return err
 		}
 		_, err := eng.ClaudeTick(ctx, nil, r) // switch right away if the active account is limited
@@ -729,6 +729,7 @@ the limit. Usage comes from a tiny Claude Code request with each account's token
 	c.Flags().BoolVar(&check, "check", false, "check usage now")
 
 	var addToken string
+	var addUse bool
 	add := &cobra.Command{
 		Use:   "add [name]",
 		Short: "Add a Claude account (browser approval, or --token from `claude setup-token`)",
@@ -742,10 +743,11 @@ the limit. Usage comes from a tiny Claude Code request with each account's token
 				line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
 				addToken = strings.TrimSpace(line)
 			}
-			return addClaudeAccount(cmd.Context(), name, addToken)
+			return addClaudeAccount(cmd.Context(), name, addToken, addUse)
 		},
 	}
 	add.Flags().StringVar(&addToken, "token", "", "a token from `claude setup-token` (- reads stdin)")
+	add.Flags().BoolVar(&addUse, "use", false, "make it the active account straight away")
 
 	use := &cobra.Command{
 		Use:   "use <account>",
@@ -789,6 +791,20 @@ the limit. Usage comes from a tiny Claude Code request with each account's token
 		Short: "Rename an account",
 		Args:  cobra.ExactArgs(2),
 		RunE:  func(cmd *cobra.Command, args []string) error { return eng.RenameClaudeAccount(args[0], args[1]) },
+	}
+	token := &cobra.Command{
+		Use:     "token <account>",
+		Short:   "Print an account's token (sk-ant-oat01-…)",
+		Example: "  sky accounts claude token work | pbcopy",
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			t, err := eng.ClaudeAccountToken(args[0])
+			if err != nil {
+				return err
+			}
+			fmt.Println(t)
+			return nil
+		},
 	}
 	enable := &cobra.Command{
 		Use:   "enable <account>",
@@ -858,6 +874,6 @@ the limit. Usage comes from a tiny Claude Code request with each account's token
 			return nil
 		},
 	}
-	c.AddCommand(add, use, rm, move, rename, enable, disable, auto, strategy, tick)
+	c.AddCommand(add, use, rm, move, rename, token, enable, disable, auto, strategy, tick)
 	return c
 }

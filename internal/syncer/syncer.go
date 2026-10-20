@@ -283,6 +283,24 @@ func (x *run) shOK(cmd string) string {
 	return out
 }
 
+// remoteJSONStrict is remoteJSON for a file about to be written back: one that is there but
+// doesn't parse (read while Claude Code was writing it, say) is an error, not an empty object
+// whose write-back would wipe it.
+func (x *run) remoteJSONStrict(path string) (map[string]any, error) {
+	out, err := x.sh("if [ -e " + path + " ]; then cat " + path + "; fi")
+	if err != nil {
+		return nil, err
+	}
+	m := map[string]any{}
+	if strings.TrimSpace(out) == "" {
+		return m, nil
+	}
+	if err := json.Unmarshal([]byte(out), &m); err != nil {
+		return nil, fmt.Errorf("~/%s couldn't be read (left as it is; tried again next sync): %w", path, err)
+	}
+	return m, nil
+}
+
 func (x *run) remoteJSON(path string) map[string]any {
 	out := x.shOK("cat " + path + " 2>/dev/null")
 	m := map[string]any{}

@@ -1,6 +1,8 @@
-// Claude usage at the bottom of the sidebar: the account machines are on, how much of its
-// 5-hour and weekly windows is used, and who is next. Click to manage accounts.
-import type { ClaudeAccountView, UsageWindow } from "../lib/api";
+// Claude usage at the bottom of the sidebar: the account sessions are on, how much of its
+// 5-hour and weekly windows is used, and who is next. Following this Mac's login, that is the
+// account /login last chose. Click to manage accounts.
+import { useEffect, useState } from "react";
+import { api, type ClaudeAccountView, type LocalLogin, type UsageWindow } from "../lib/api";
 import { setState } from "../lib/store";
 import { cx } from "../lib/util";
 import { useNow } from "./ui";
@@ -41,6 +43,13 @@ function Meter({ label, w, now }: { label: string; w?: UsageWindow; now: number 
 export function UsageFooter() {
   const accounts = useClaudeAccounts();
   const now = useNow(30000);
+  const [follow, setFollow] = useState(false);
+  const [login, setLogin] = useState<LocalLogin | null>(null);
+  // /login sends the account list again, so this stays current with it.
+  useEffect(() => {
+    api.claudeSource().then((s) => setFollow(s === "login")).catch(() => {});
+    api.claudeLocalLogin().then(setLogin).catch(() => setLogin(null));
+  }, [accounts]);
   if (!accounts) return null;
   const open = () => setState({ view: "accounts" });
   if (accounts.length === 0)
@@ -49,9 +58,24 @@ export function UsageFooter() {
         <BrandIcon name="claude" size={12} /> Add a Claude account
       </button>
     );
-  const active = accounts.find((a) => a.active) ?? accounts[0];
-  const others = accounts.filter((a) => a !== active && !a.account.disabled);
   const name = (v: ClaudeAccountView) => (v.account.label || v.account.email || "Claude").replace(/@.*$/, "");
+  const pooled = accounts.find((a) => a.active) ?? accounts[0];
+  const mine = login?.accountId ? accounts.find((a) => a.account.id === login.accountId) : undefined;
+  if (follow && login?.email && !mine)
+    // signed in to an account the pool doesn't have: no usage to show for it
+    return (
+      <button onClick={open} title="Claude accounts and usage" className="group no-drag flex w-full flex-col px-4 pt-2.5 pb-3 text-left">
+        <div className="flex items-center gap-2 text-[11.5px] leading-none">
+          <BrandIcon name="claude" size={12} />
+          <span className="min-w-0 flex-1 truncate font-medium text-muted group-hover:text-fg">{login.email.replace(/@.*$/, "")}</span>
+        </div>
+        <div className="mt-2.5 text-[10.5px] leading-none text-subtle">This Mac's login · not in your accounts</div>
+      </button>
+    );
+  const active = follow && mine ? mine : pooled;
+  const others = accounts.filter((a) => a !== active && !a.account.disabled);
+  // in rotation, say so when this Mac's own login is another account
+  const macLogin = !follow && login?.email && !(mine ? mine === active : login.email.toLowerCase() === active.account.email?.toLowerCase()) ? (mine ? name(mine) : login.email.replace(/@.*$/, "")) : "";
   const next = others.find((v) => v.next && !limited(v, now)) ?? others.find((v) => !limited(v, now));
   const resting = others.filter((v) => limited(v, now));
   const nextWeek = next?.status.windows?.seven_day;
@@ -62,6 +86,11 @@ export function UsageFooter() {
         <span className="min-w-0 flex-1 truncate font-medium text-muted group-hover:text-fg">{name(active)}</span>
         {active.plan && <span className="shrink-0 text-[10.5px] text-subtle">{active.plan}</span>}
       </div>
+      {macLogin && (
+        <div className="mt-2 truncate text-[10.5px] leading-none text-subtle" title="Claude Code's own login on this Mac. Sessions here use the account above; choose This Mac's login in accounts to follow /login instead.">
+          This Mac signed in as <span className="text-muted">{macLogin}</span>
+        </div>
+      )}
       {limited(active, now) ? (
         <div className="mt-2.5 text-[10.5px] leading-none text-warn">At its limit · back {short(active.status.resetsAt, now)}</div>
       ) : (

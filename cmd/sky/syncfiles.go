@@ -133,7 +133,11 @@ func backgroundSync(cmd *cobra.Command, args []string) error {
 	eng.Sync(cmd.Context(), args, syncer.Options{}, r)
 	// Sessions still on a login the machines have moved off (the app does this too, faster,
 	// while it is open; each session is moved once, by whichever gets there first).
-	if sessions, _ := eng.AllSessions(cmd.Context()); len(sessions) > 0 {
+	sessions, _ := eng.AllSessions(cmd.Context())
+	if local, err := eng.LocalSessions(cmd.Context()); err == nil {
+		sessions = append(sessions, local...)
+	}
+	if len(sessions) > 0 {
 		if moved := eng.MoveToNewLogin(cmd.Context(), sessions); len(moved) > 0 {
 			fmt.Fprintf(f, "%s claude: moved %s to the machines' current login\n", time.Now().Format("2006-01-02 15:04:05"), engine.LoginSummary(moved))
 		}

@@ -47,6 +47,12 @@ type Settings struct {
 	ClaudeActive    string              `json:"claudeActive,omitempty"`     // account machines use now
 	ClaudeAuto      *bool               `json:"claudeAutoSwitch,omitempty"` // switch accounts when one hits a limit
 	ClaudeStrategy  string              `json:"claudeStrategy,omitempty"`   // "smart" (default): use what expires first; "order": my list order
+	// Where sessions get their Claude login: "" (rotation, the default) from the account pool,
+	// "login" from this computer's own Claude Code login, whatever /login last chose.
+	ClaudeSource string `json:"claudeSource,omitempty"`
+	// The active account was picked by hand (Use now, or /login): smart rotation leaves it until
+	// it hits a limit instead of moving to a better one.
+	ClaudePinned bool `json:"claudePinned,omitempty"`
 	// Leave running Claude sessions on the old login when machines switch accounts (they move
 	// when they next start). By default they are restarted onto the new one when idle.
 	ClaudeLeaveSessions bool     `json:"claudeLeaveSessions,omitempty"`
@@ -118,6 +124,10 @@ func (s Settings) ClaudeAutoOn() bool { return on(s.ClaudeAuto, true) }
 // ClaudeSmart reports whether accounts are ranked automatically (the default) rather than
 // used in the order the user arranged them.
 func (s Settings) ClaudeSmart() bool { return s.ClaudeStrategy != "order" }
+
+// ClaudeFollowLogin reports whether sessions use this computer's own Claude Code login
+// rather than the account pool's rotation.
+func (s Settings) ClaudeFollowLogin() bool { return s.ClaudeSource == "login" }
 
 // Interval is the background sync period.
 func (s Settings) Interval() time.Duration {

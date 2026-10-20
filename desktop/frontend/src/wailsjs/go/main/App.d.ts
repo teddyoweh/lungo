@@ -11,7 +11,7 @@ export function APIKeys():Promise<Array<engine.APIKeyView>>;
 
 export function APIProviders():Promise<Array<main.APIProvider>>;
 
-export function AddClaudeAccount(arg1:string,arg2:string):Promise<string>;
+export function AddClaudeAccount(arg1:string,arg2:string,arg3:boolean):Promise<string>;
 
 export function AddLink(arg1:model.Link):Promise<model.Link>;
 
@@ -31,6 +31,8 @@ export function CheckClaudeAccounts():Promise<string>;
 
 export function CheckForUpdates():Promise<main.UpdateInfo>;
 
+export function ClaudeAccountToken(arg1:string):Promise<string>;
+
 export function ClaudeAccounts():Promise<Array<engine.ClaudeAccountView>>;
 
 export function ClaudeAutoSwitch():Promise<boolean>;
@@ -40,6 +42,10 @@ export function ClaudeMoveSessions():Promise<boolean>;
 export function ClaudePreciseScroll():Promise<boolean>;
 
 export function ClaudeStatus():Promise<main.ClaudeStatus>;
+
+export function ClaudeLocalLogin():Promise<engine.LocalLogin>;
+
+export function ClaudeSource():Promise<string>;
 
 export function ClaudeStrategy():Promise<string>;
 
@@ -54,6 +60,8 @@ export function CloseTerminal(arg1:string):Promise<void>;
 export function CloseTunnel(arg1:string):Promise<void>;
 
 export function Connect(arg1:string):Promise<void>;
+
+export function CopyClaudeAccountToken(arg1:string):Promise<void>;
 
 export function CopyText(arg1:string):Promise<void>;
 
@@ -238,6 +246,8 @@ export function SetClaudeAutoSwitch(arg1:boolean):Promise<void>;
 export function SetClaudeMoveSessions(arg1:boolean):Promise<void>;
 
 export function SetClaudePreciseScroll(arg1:boolean):Promise<void>;
+
+export function SetClaudeSource(arg1:string):Promise<void>;
 
 export function SetClaudeStrategy(arg1:string):Promise<void>;
 

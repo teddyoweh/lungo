@@ -590,20 +590,38 @@ func (a *App) ClaudeAccounts() ([]engine.ClaudeAccountView, error) {
 	return v, err
 }
 
-// AddClaudeAccount adds an account: with no token it runs the browser sign-in.
-func (a *App) AddClaudeAccount(label, token string) string {
+// AddClaudeAccount adds an account: with no token it runs the browser sign-in. use makes it
+// the active account straight away.
+func (a *App) AddClaudeAccount(label, token string, use bool) string {
+	opts := engine.AddOptions{Use: use}
+	if l := a.eng.ClaudeLocalLogin(); label == "" && token == "" && l != nil && l.AccountID == "" {
+		opts.Expect = syncer.LocalAccount(paths.Home()) // most likely what the browser approves
+	}
+	return a.addClaudeAccount(label, token, opts)
+}
+
+// addLoginAccount adds the account a /login here just switched to, which the pool doesn't
+// have: the browser approval opens by itself, and the account is used once it is added.
+func (a *App) addLoginAccount(acct syncer.Account) {
+	wruntime.EventsEmit(a.ctx, "claude:adding", acct.Email())
+	a.addClaudeAccount("", "", engine.AddOptions{Use: true, Expect: acct})
+}
+
+func (a *App) addClaudeAccount(label, token string, opts engine.AddOptions) string {
 	title := "Add Claude account"
 	if label != "" {
 		title += " " + label
+	} else if opts.Expect != nil {
+		title += " " + opts.Expect.Email()
 	}
 	return a.ops.start("claude-account", title, "", func(ctx context.Context, r events.Reporter) (any, error) {
-		acct, err := a.eng.AddClaudeAccount(ctx, label, token, r)
+		acct, err := a.eng.AddClaudeAccount(ctx, label, token, opts, r)
 		a.emitClaude()
 		if err != nil {
 			return nil, err
 		}
 		// Switch right away if the active account is limited.
-		if res, terr := a.eng.ClaudeTick(ctx, a.poll.sessions(), r); terr == nil && res.Switched {
+		if res, terr := a.eng.ClaudeTick(ctx, a.poll.publishedSessions(), r); terr == nil && res.Switched {
 			a.announceSwitch(res)
 		}
 		a.emitClaude()
@@ -614,6 +632,19 @@ func (a *App) AddClaudeAccount(label, token string) string {
 func (a *App) RemoveClaudeAccount(id string) error {
 	defer a.emitClaude()
 	return a.eng.RemoveClaudeAccount(id)
+}
+
+// ClaudeAccountToken is an account's token, to show.
+func (a *App) ClaudeAccountToken(id string) (string, error) { return a.eng.ClaudeAccountToken(id) }
+
+// CopyClaudeAccountToken puts an account's token on the clipboard without passing it
+// through the page.
+func (a *App) CopyClaudeAccountToken(id string) error {
+	t, err := a.eng.ClaudeAccountToken(id)
+	if err != nil {
+		return err
+	}
+	return wruntime.ClipboardSetText(a.ctx, t)
 }
 
 func (a *App) RenameClaudeAccount(id, label string) error {
@@ -635,6 +666,25 @@ func (a *App) SetClaudeAutoSwitch(on bool) error {
 	defer a.emitClaude()
 	return a.eng.SetClaudeAutoSwitch(on)
 }
+
+// ClaudeSource is where sessions get their login: "pool" (rotation) or "login" (this Mac's
+// Claude Code login, switched with /login).
+func (a *App) ClaudeSource() string {
+	if s, _ := a.eng.Settings(); s.ClaudeFollowLogin() {
+		return "login"
+	}
+	return "pool"
+}
+
+func (a *App) SetClaudeSource(source string) error {
+	defer a.emitClaude()
+	ctx, cancel := context.WithTimeout(a.ctx, 3*time.Minute)
+	defer cancel()
+	return a.eng.SetClaudeSource(ctx, source, nil)
+}
+
+// ClaudeLocalLogin is this Mac's Claude Code login and whether the pool has it.
+func (a *App) ClaudeLocalLogin() *engine.LocalLogin { return a.eng.ClaudeLocalLogin() }
 
 // SetClaudeStrategy picks "smart" (use what expires first) or "order" (the list order).
 func (a *App) SetClaudeStrategy(strategy string) error {
@@ -672,7 +722,7 @@ func (a *App) CheckClaudeAccounts() string {
 			return nil, err
 		}
 		a.emitClaude()
-		res, err := a.eng.ClaudeTick(ctx, a.poll.sessions(), r)
+		res, err := a.eng.ClaudeTick(ctx, a.poll.publishedSessions(), r)
 		if res.Switched {
 			a.announceSwitch(res)
 		}
@@ -702,6 +752,12 @@ func (a *App) activeAccountName() string {
 		}
 	}
 	return ""
+}
+
+// announceFollow says sessions moved to the account a /login on this computer chose.
+func (a *App) announceFollow(to string) {
+	notify("Sessions now use "+to, "Claude Code on this Mac signed in to it with /login.")
+	wruntime.EventsEmit(a.ctx, "claude:switched", engine.TickResult{Switched: true, To: to, Followed: to})
 }
 
 func (a *App) announceSwitch(res engine.TickResult) {

@@ -245,7 +245,10 @@ func (x *run) syncSettings() error {
 		return fmt.Errorf("~/.claude/settings.json is not valid JSON: %w", err)
 	}
 	builtin := map[string]any{"env": map[string]any{"DISABLE_AUTOUPDATER": "1"}}
-	remote := x.remoteJSON(".claude/settings.json")
+	remote, err := x.remoteJSONStrict(".claude/settings.json")
+	if err != nil {
+		return err
+	}
 	// Keys Claude Code writes on the machine itself (installing plugins there) are kept,
 	// with this computer's values winning where both have them.
 	kept := map[string]any{}
@@ -522,7 +525,10 @@ func (x *run) syncLogin() error {
 
 	// Account details when we know them for this account, none otherwise (so a machine never
 	// shows one account while using another), and no first-run wizard.
-	cj := x.remoteJSON(".claude.json")
+	cj, err := x.remoteJSONStrict(".claude.json")
+	if err != nil {
+		return err
+	}
 	changed := false
 	if oauth != nil {
 		if cur, _ := cj["oauthAccount"].(map[string]any); !equalJSON(cur, oauth) {

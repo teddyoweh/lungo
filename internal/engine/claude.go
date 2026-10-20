@@ -82,7 +82,7 @@ func (e *Engine) ClaudeAccounts() ([]ClaudeAccountView, error) {
 	for _, a := range c.ClaudeAccounts {
 		st := statuses[a.ID]
 		v := ClaudeAccountView{Account: a, Status: st, Active: a.ID == active, Next: a.ID == nextID, Suggest: a.ID == suggestID,
-			HasToken: has(a.ID), Summary: claudeacct.Describe(st), Local: a.Email != "" && a.Email == localEmail,
+			HasToken: has(a.ID), Summary: claudeacct.Describe(st), Local: a.Email != "" && strings.EqualFold(a.Email, localEmail),
 			Rank: rankOf[a.ID], Reason: byID[a.ID].Reason}
 		if a.OAuthAccount != nil {
 			v.Plan = claudeacct.Plan(a.OAuthAccount)
@@ -180,9 +180,18 @@ func newID() string {
 	return "acct-" + hex.EncodeToString(b)
 }
 
+// AddOptions are the choices when adding an account.
+type AddOptions struct {
+	Use bool // make it the active account straight away (as Use now does)
+	// The account this computer's Claude Code was just signed in to with /login, which the
+	// browser approval is expected to be: the new account takes its name unless its usage
+	// shows it is another one.
+	Expect syncer.Account
+}
+
 // AddClaudeAccount adds an account to the pool. With an empty token it runs
 // `claude setup-token`, which signs in with whatever claude.ai account the browser is on.
-func (e *Engine) AddClaudeAccount(ctx context.Context, label, token string, r events.Reporter) (*model.ClaudeAccount, error) {
+func (e *Engine) AddClaudeAccount(ctx context.Context, label, token string, opts AddOptions, r events.Reporter) (*model.ClaudeAccount, error) {
 	_ = e.adoptLocalAccount()
 	token = strings.TrimSpace(token)
 	if token == "" {
@@ -224,8 +233,16 @@ func (e *Engine) AddClaudeAccount(ctx context.Context, label, token string, r ev
 	}); err != nil {
 		return nil, err
 	}
+	if opts.Expect != nil && strings.TrimSpace(label) == "" {
+		e.nameFromLogin(ctx, a.ID, st, opts.Expect, r)
+	}
 	events.Donef(r, "Added %s (%s)", a.Label, claudeacct.Describe(st))
 	_ = e.IdentifyClaudeAccounts(ctx, r)
+	if opts.Use {
+		if err := e.useAccount(ctx, a.ID, true, r); err != nil {
+			return a, err
+		}
+	}
 	if c, err := config.Load(); err == nil {
 		for _, x := range c.ClaudeAccounts {
 			if x.ID == a.ID {
@@ -237,6 +254,30 @@ func (e *Engine) AddClaudeAccount(ctx context.Context, label, token string, r ev
 }
 
 var defaultLabel = regexp.MustCompile(`^(Account \d+)?$`)
+
+// nameFromLogin gives a new account the identity of the /login account it was approved for,
+// unless this computer's login and the new token show different usage (the browser was on
+// another claude.ai account).
+func (e *Engine) nameFromLogin(ctx context.Context, id string, st claudeacct.Status, want syncer.Account, r events.Reporter) {
+	if now := syncer.LocalAccount(paths.Home()); now == nil || now.UUID() != want.UUID() {
+		return // signed in to something else since
+	}
+	if claudeacct.DifferentAccount(claudeacct.ProbeLocal(ctx), st) {
+		events.Warnf(r, "The browser approved a different account than %s; it was added without a name. To add %s, switch to it on claude.ai and add it again.", want.Email(), want.Email())
+		return
+	}
+	_ = config.Update(func(c *config.Config) error {
+		for _, x := range c.ClaudeAccounts {
+			if x.ID == id {
+				x.Email, x.OAuthAccount = want.Email(), want
+				if defaultLabel.MatchString(x.Label) {
+					x.Label = want.Email()
+				}
+			}
+		}
+		return nil
+	})
+}
 
 // IdentifyClaudeAccounts gives nameless accounts their real identity. A token can't read
 // its own profile, but this computer's Claude Code login can: when the login's usage windows
@@ -329,6 +370,23 @@ func (e *Engine) RemoveClaudeAccount(key string) error {
 	return nil
 }
 
+// ClaudeAccountToken is an account's token (sk-ant-oat01-…), for you to copy or look at.
+func (e *Engine) ClaudeAccountToken(key string) (string, error) {
+	c, err := config.Load()
+	if err != nil {
+		return "", err
+	}
+	a, _, err := e.findAccount(c, key)
+	if err != nil {
+		return "", err
+	}
+	t := claudeacct.Token(a.ID)
+	if t == "" {
+		return "", fmt.Errorf("%s has no token saved", a.Name())
+	}
+	return t, nil
+}
+
 // RenameClaudeAccount changes an account's label.
 func (e *Engine) RenameClaudeAccount(key, label string) error {
 	return config.Update(func(c *config.Config) error {
@@ -382,8 +440,35 @@ func (e *Engine) SetClaudeAutoSwitch(on bool) error {
 	return e.UpdateSettings(func(s *config.Settings) { s.ClaudeAuto = &on })
 }
 
-// UseClaudeAccount makes an account the active one and signs every machine in with it.
+// SetClaudeSource picks where sessions get their login: "pool" (rotation) or "login" (this
+// computer's own Claude Code login, switched with /login).
+func (e *Engine) SetClaudeSource(ctx context.Context, source string, r events.Reporter) error {
+	switch source {
+	case "pool":
+		source = ""
+	case "login":
+	default:
+		return fmt.Errorf("source is pool or login")
+	}
+	if err := e.UpdateSettings(func(s *config.Settings) { s.ClaudeSource, s.ClaudePinned = source, false }); err != nil {
+		return err
+	}
+	if source == "login" {
+		if _, err := e.FollowLocalLogin(ctx, r); err != nil {
+			return err
+		}
+	}
+	return e.syncLocalLogin(ctx)
+}
+
+// UseClaudeAccount makes an account the active one and signs every machine in with it, and
+// the sessions on this computer (see claudelocal.go). Picking one by hand means rotation: it
+// stays in use until it hits a limit.
 func (e *Engine) UseClaudeAccount(ctx context.Context, key string, r events.Reporter) error {
+	return e.useAccount(ctx, key, true, r)
+}
+
+func (e *Engine) useAccount(ctx context.Context, key string, byHand bool, r events.Reporter) error {
 	var name string
 	if err := config.Update(func(c *config.Config) error {
 		a, _, err := e.findAccount(c, key)
@@ -394,9 +479,23 @@ func (e *Engine) UseClaudeAccount(ctx context.Context, key string, r events.Repo
 			return fmt.Errorf("%s is turned off; turn it on first", a.Name())
 		}
 		c.Settings.ClaudeActive, name = a.ID, a.Name()
+		c.Settings.ClaudePinned = byHand
+		if byHand {
+			c.Settings.ClaudeSource = ""
+		}
 		return nil
 	}); err != nil {
 		return err
+	}
+	e.signInEverywhere(ctx, name, r)
+	return nil
+}
+
+// signInEverywhere signs the sessions on this computer and every machine in as the active
+// account, name.
+func (e *Engine) signInEverywhere(ctx context.Context, name string, r events.Reporter) {
+	if err := e.syncLocalLogin(ctx); err != nil {
+		events.Warnf(r, "Sessions on this computer keep their login: %v", err)
 	}
 	events.Stepf(r, "Signing machines in as %s", name)
 	res := e.Sync(ctx, nil, syncer.Options{Only: []string{syncer.ItemClaudeLogin}}, r)
@@ -407,7 +506,6 @@ func (e *Engine) UseClaudeAccount(ctx context.Context, key string, r events.Repo
 		}
 	}
 	events.Donef(r, "%d machine(s) now use %s", n, name)
-	return nil
 }
 
 // CheckClaudeAccounts checks every account's usage now.
@@ -418,8 +516,13 @@ func (e *Engine) CheckClaudeAccounts(ctx context.Context, r events.Reporter) ([]
 		return nil, err
 	}
 	var wg sync.WaitGroup
+	now := time.Now()
 	for _, v := range views {
 		if !v.HasToken {
+			continue
+		}
+		if st := v.Status; !v.Active && !st.CheckedAt.IsZero() && st.State != claudeacct.StateInvalid && st.State != claudeacct.StateError && !st.Running(now) {
+			events.Infof(r, "%s: week not started; left unchecked so it doesn't start", v.Account.Name())
 			continue
 		}
 		wg.Add(1)
@@ -458,9 +561,10 @@ type TickResult struct {
 	From       string    `json:"from,omitempty"`
 	To         string    `json:"to,omitempty"`
 	Reason     string    `json:"reason,omitempty"`
-	Restarted  int       `json:"restarted"`      // sessions resumed on the new account
-	AllLimited bool      `json:"allLimited"`     // nothing to switch to
-	Next       time.Time `json:"next,omitempty"` // earliest reset when everything is limited
+	Restarted  int       `json:"restarted"`          // sessions resumed on the new account
+	AllLimited bool      `json:"allLimited"`         // nothing to switch to
+	Followed   string    `json:"followed,omitempty"` // sessions moved to the account a /login here chose
+	Next       time.Time `json:"next,omitempty"`     // earliest reset when everything is limited
 }
 
 var limitScreen = regexp.MustCompile(`(?i)(hit your|reached).{0,40}limit|limit (reached|hit)|usage limit`)
@@ -471,12 +575,13 @@ func IsLimitMessage(s string) bool { return limitScreen.MatchString(s) }
 // ClaudeTick is one rotation pass, run every minute by the desktop app and the background
 // agent:
 //   - a Claude session showing a limit message triggers a check of the active account;
-//   - accounts are re-checked on a schedule (the active one every 15 minutes, limited ones
-//     right after they reset, the rest hourly);
+//   - accounts are re-checked on a schedule (see dueForCheck), all at once;
 //   - when the active account is limited or rejected and auto-switch is on, machines move to
 //     the next usable account and sessions stuck on the limit resume on it.
 //
-// sessions may be nil, in which case they are listed here.
+// Sessions on this computer follow the active account too (see claudelocal.go); one stuck on
+// a limit is moved by MoveToNewLogin, not resumed here. sessions may be nil, in which case
+// they are listed here.
 func (e *Engine) ClaudeTick(ctx context.Context, sessions []Session, r events.Reporter) (TickResult, error) {
 	var res TickResult
 	l := flock.New(filepath.Join(paths.State(), "claude-tick.lock"))
@@ -484,6 +589,10 @@ func (e *Engine) ClaudeTick(ctx context.Context, sessions []Session, r events.Re
 		return res, nil
 	}
 	defer l.Unlock()
+	if to, _ := e.FollowLocalLogin(ctx, r); to != "" { // a /login on this computer
+		res.Followed = to
+	}
+	_ = e.syncLocalLogin(ctx) // also when the active account was changed elsewhere (the CLI)
 
 	views, err := e.ClaudeAccounts()
 	if err != nil || len(views) == 0 {
@@ -498,47 +607,55 @@ func (e *Engine) ClaudeTick(ctx context.Context, sessions []Session, r events.Re
 
 	if sessions == nil {
 		sessions, _ = e.AllSessions(ctx)
-	}
-	var blocked []Session
-	for _, s := range sessions {
-		if s.Claude && s.State == "waiting" && IsLimitMessage(s.Message) {
-			blocked = append(blocked, s)
+		if local, err := e.LocalSessions(ctx); err == nil {
+			sessions = append(sessions, local...)
 		}
 	}
-
-	// Which accounts are due for a check.
-	now := time.Now()
-	due := map[string]bool{}
-	for _, v := range views {
-		if !v.HasToken || v.Account.Disabled {
+	var blocked []Session // on machines, resumed here
+	limitSeen := false    // a session on the active account's login shows a limit
+	for _, s := range sessions {
+		if !s.Claude || s.State != "waiting" || !IsLimitMessage(s.Message) {
 			continue
 		}
-		st := statuses[v.Account.ID]
-		age := now.Sub(st.CheckedAt)
-		switch {
-		case st.CheckedAt.IsZero():
-			due[v.Account.ID] = true
-		case st.State == claudeacct.StateLimited && !st.ResetsAt.IsZero() && now.After(st.ResetsAt.Add(30*time.Second)) && age > time.Minute:
-			due[v.Account.ID] = true
-		case v.Account.ID == active && (age > 15*time.Minute || len(blocked) > 0 && age > 2*time.Minute):
-			due[v.Account.ID] = true
-		case age > time.Hour:
-			due[v.Account.ID] = true
+		if !IsLocal(s.Machine) {
+			blocked = append(blocked, s)
+			limitSeen = true
+		} else if !s.LoginAt.IsZero() && !s.OldLogin {
+			limitSeen = true
 		}
-	}
-	for id := range due {
-		st := claudeacct.Probe(ctx, claudeacct.Token(id))
-		if st.State == claudeacct.StateError {
-			prev := statuses[id]
-			prev.Message, prev.CheckedAt = st.Message, st.CheckedAt
-			st = prev // keep what we knew; a failed check says nothing about the account
-		}
-		statuses[id] = st
-		_ = claudeacct.Save(id, st)
 	}
 
-	if !c.Settings.ClaudeAutoOn() || active == "" {
-		return res, nil
+	// Check the accounts that are due, all at once (one at a time, a few slow ones used up
+	// the pass's time and the rest timed out).
+	now := time.Now()
+	var due []string
+	for _, v := range views {
+		if v.HasToken && !v.Account.Disabled && dueForCheck(statuses[v.Account.ID], v.Account.ID == active, limitSeen, now) {
+			due = append(due, v.Account.ID)
+		}
+	}
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for _, id := range due {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			st := claudeacct.Probe(ctx, claudeacct.Token(id))
+			mu.Lock()
+			defer mu.Unlock()
+			if st.State == claudeacct.StateError {
+				prev := statuses[id]
+				prev.Message, prev.CheckedAt = st.Message, st.CheckedAt
+				st = prev // keep what we knew; a failed check says nothing about the account
+			}
+			statuses[id] = st
+			_ = claudeacct.Save(id, st)
+		}()
+	}
+	wg.Wait()
+
+	if !c.Settings.ClaudeAutoOn() || active == "" || c.Settings.ClaudeFollowLogin() {
+		return res, nil // following this computer's login: /login switches, not sky
 	}
 	has := func(id string) bool { return claudeacct.Token(id) != "" }
 	cur := statuses[active]
@@ -555,7 +672,7 @@ func (e *Engine) ClaudeTick(ctx context.Context, sessions []Session, r events.Re
 	target, voluntary := active, false
 	if c.Settings.ClaudeSmart() {
 		ranked := rankAccounts(c, statuses, has)
-		if best := smartPick(ranked, active); best != "" && best != active {
+		if best := smartPick(ranked, active); best != "" && best != active && !(c.Settings.ClaudePinned && cur.Usable()) {
 			target = best
 			voluntary = cur.Usable() // the active one still works; this is a better use of allowances
 		} else if best == "" && !cur.Usable() {
@@ -595,8 +712,9 @@ func (e *Engine) ClaudeTick(ctx context.Context, sessions []Session, r events.Re
 		return res, nil
 	}
 	// A voluntary move (better use of allowances, nothing is broken) happens at most every
-	// 20 minutes; running sessions keep their account until they hit a limit.
-	if voluntary && !claudeacct.Attempt("claude-switch", 20*time.Minute) {
+	// 3 hours after any switch: using an account lowers its score, so two close accounts
+	// would otherwise trade places all day, restarting idle sessions each time.
+	if voluntary && !claudeacct.Attempt("claude-switch", 3*time.Hour) {
 		return res, nil
 	}
 	res.Switched, res.From, res.To = true, name(active), name(target)
@@ -608,7 +726,7 @@ func (e *Engine) ClaudeTick(ctx context.Context, sessions []Session, r events.Re
 		res.Reason = claudeacct.Describe(cur)
 		events.Stepf(r, "%s: %s. Switching machines to %s", res.From, res.Reason, res.To)
 	}
-	if err := e.UseClaudeAccount(ctx, target, r); err != nil {
+	if err := e.useAccount(ctx, target, false, r); err != nil {
 		return res, err
 	}
 	for _, s := range blocked {
@@ -619,6 +737,34 @@ func (e *Engine) ClaudeTick(ctx context.Context, sessions []Session, r events.Re
 		}
 	}
 	return res, nil
+}
+
+// dueForCheck says whether an account's usage should be checked now. A check is a small
+// Claude request, and it starts any window that isn't running, so:
+//   - one never checked is (is its token good?);
+//   - the active one every 15 minutes, every 2 when a session shows a limit;
+//   - one at a limit waits for its reset, which is known (Load treats it as over then);
+//   - one with no window running is left alone: it's fresh, and a check would start its week
+//     while it waits to be used. It is checked once it is in use;
+//   - a rejected one every 6 hours (an admin may turn its organization's access back on);
+//   - the rest hourly (their windows are running anyway).
+func dueForCheck(st claudeacct.Status, active, limitSeen bool, now time.Time) bool {
+	age := now.Sub(st.CheckedAt)
+	switch {
+	case st.CheckedAt.IsZero():
+		return true
+	case active:
+		return age > 15*time.Minute || limitSeen && age > 2*time.Minute
+	case st.State == claudeacct.StateInvalid:
+		return age > 6*time.Hour
+	case st.State == claudeacct.StateLimited && !st.ResetsAt.IsZero():
+		return false
+	case st.State == claudeacct.StateError:
+		return age > 10*time.Minute
+	case !st.Running(now):
+		return false
+	}
+	return age > time.Hour
 }
 
 // pickNext is the first usable account after active in priority order, wrapping around:

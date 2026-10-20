@@ -59,6 +59,9 @@ func Score(st Status, plan string, now time.Time) Ranked {
 	r := Ranked{Usable: st.Usable() && st.State != StateError, Left: 1}
 	if st.State == StateInvalid {
 		r.Reason = "Token rejected"
+		if OrgBlocked(st) {
+			r.Reason = "Its organization has turned off Claude Code for subscriptions"
+		}
 		return r
 	}
 	if st.State == StateLimited && !st.Usable() {

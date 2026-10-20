@@ -384,6 +384,13 @@ export interface TickResult {
   restarted: number;
   allLimited: boolean;
   next?: string;
+  followed?: string; // sessions moved to the account a /login on this Mac chose
+}
+/** This Mac's own Claude Code login, as the account pool sees it. */
+export interface LocalLogin {
+  email: string;
+  accountId?: string; // the pool account it is; absent when not in the pool
+  changedAt?: string; // when a /login switched it
 }
 export interface Credential {
   path: string;
@@ -539,8 +546,10 @@ export const api = {
   setAPIKeyMachines: (name: string, machines: string[] | null) => call<string>("SetAPIKeyMachines", name, machines),
   testAPIKey: (name: string) => call<KeyTest>("TestAPIKey", name),
   claudeAccounts: () => call<ClaudeAccountView[]>("ClaudeAccounts"),
-  addClaudeAccount: (label: string, token: string) => call<string>("AddClaudeAccount", label, token),
+  addClaudeAccount: (label: string, token: string, use: boolean) => call<string>("AddClaudeAccount", label, token, use),
   removeClaudeAccount: (id: string) => call<void>("RemoveClaudeAccount", id),
+  claudeAccountToken: (id: string) => call<string>("ClaudeAccountToken", id),
+  copyClaudeAccountToken: (id: string) => call<void>("CopyClaudeAccountToken", id),
   renameClaudeAccount: (id: string, label: string) => call<void>("RenameClaudeAccount", id, label),
   moveClaudeAccount: (id: string, delta: number) => call<void>("MoveClaudeAccount", id, delta),
   setClaudeAccountEnabled: (id: string, on: boolean) => call<void>("SetClaudeAccountEnabled", id, on),
@@ -549,6 +558,9 @@ export const api = {
   claudeAutoSwitch: () => call<boolean>("ClaudeAutoSwitch"),
   claudeStrategy: () => call<"smart" | "order">("ClaudeStrategy"),
   setClaudeStrategy: (s: "smart" | "order") => call<void>("SetClaudeStrategy", s),
+  claudeSource: () => call<"pool" | "login">("ClaudeSource"),
+  setClaudeSource: (s: "pool" | "login") => call<void>("SetClaudeSource", s),
+  claudeLocalLogin: () => call<LocalLogin | null>("ClaudeLocalLogin"),
   setClaudeAutoSwitch: (on: boolean) => call<void>("SetClaudeAutoSwitch", on),
   claude: () => call<ClaudeStatus>("ClaudeStatus"),
   mintClaude: () => call<string>("MintClaudeToken"),

@@ -134,7 +134,7 @@ function PaneHeader({ tab, focused, session }: { tab: Tab; focused: boolean; ses
 const NO_PORTS: Port[] = [];
 
 const chip =
-  "flex h-[22px] min-w-0 items-center gap-1.5 rounded-md border border-line-strong px-2 text-[11.5px] text-muted transition-colors hover:border-[var(--subtle)] hover:text-fg";
+  "flex h-[22px] max-w-full min-w-0 items-center gap-1.5 rounded-md border border-line-strong px-2 text-[11.5px] text-muted transition-colors hover:border-[var(--subtle)] hover:text-fg";
 
 /** Under a pane: the folder it is in and, in a repository, its branch and what has changed. */
 function PaneFooter({ tab }: { tab: Tab }) {
@@ -154,67 +154,72 @@ function PaneFooter({ tab }: { tab: Tab }) {
   const state = repo ? [repo.changed ? `${repo.changed} changed` : "clean", repo.ahead ? `${repo.ahead} ahead` : "", repo.behind ? `${repo.behind} behind` : ""].filter(Boolean).join(" · ") : "";
   return (
     <div className="z flex shrink-0 items-center gap-1.5 pr-1.5 pl-1.5" style={{ height: PANE_FOOTER, background: "var(--term-bg)" }}>
+      {/* The folder and branch shrink to fit the pane (a long path ran on into the next one). */}
       {folder && (
-        <Menu
-          side="top"
-          align="left"
-          trigger={
-            <button title={tab.cwd} className={chip}>
-              <Folder size={12} className="shrink-0 text-subtle" />
-              <span className="truncate">{folder}</span>
-            </button>
-          }
-          items={[
-            { label: "Copy path", icon: <Copy size={13} />, onClick: copy(tab.cwd ?? folder) },
-            ...(local ? [{ label: "Reveal in Finder", icon: <FolderOpen size={13} />, onClick: () => api.reveal(tab.cwd ?? folder).catch(() => {}) }] : []),
-            "sep" as const,
-            { label: "New terminal here", icon: <SquareTerminal size={13} />, hint: `${mod}D`, onClick: here(() => splitPane("row", "shell")) },
-            { label: "New Claude session here", icon: <BrandIcon name="claude" size={13} />, onClick: here(() => splitPane("row", "claude")) },
-          ]}
-        />
+        <div className="min-w-0">
+          <Menu
+            side="top"
+            align="left"
+            trigger={
+              <button title={tab.cwd} className={chip}>
+                <Folder size={12} className="shrink-0 text-subtle" />
+                <span className="truncate">{folder}</span>
+              </button>
+            }
+            items={[
+              { label: "Copy path", icon: <Copy size={13} />, onClick: copy(tab.cwd ?? folder) },
+              ...(local ? [{ label: "Reveal in Finder", icon: <FolderOpen size={13} />, onClick: () => api.reveal(tab.cwd ?? folder).catch(() => {}) }] : []),
+              "sep" as const,
+              { label: "New terminal here", icon: <SquareTerminal size={13} />, hint: `${mod}D`, onClick: here(() => splitPane("row", "shell")) },
+              { label: "New Claude session here", icon: <BrandIcon name="claude" size={13} />, onClick: here(() => splitPane("row", "claude")) },
+            ]}
+          />
+        </div>
       )}
       {repo?.branch && (
-        <Menu
-          side="top"
-          align="left"
-          trigger={
-            <button title={`${repo.detached ? "Detached at" : "On"} ${repo.branch} · ${state}`} className={chip}>
-              <GitBranch size={12} className="shrink-0 text-subtle" />
-              <span className="truncate">{repo.branch}</span>
-              {repo.changed > 0 && (
-                <span className="flex shrink-0 items-center gap-1 text-subtle tabular-nums">
-                  <span className="size-[5px] rounded-full bg-warn" />
-                  {repo.changed}
-                </span>
-              )}
-              {repo.ahead > 0 && <span className="shrink-0 text-subtle tabular-nums">↑{repo.ahead}</span>}
-              {repo.behind > 0 && <span className="shrink-0 text-subtle tabular-nums">↓{repo.behind}</span>}
-            </button>
-          }
-          items={[
-            { label: "Copy branch name", icon: <Copy size={13} />, onClick: copy(repo.branch) },
-            // The repository goes over as it is: branch, commits, and work not committed yet.
-            ...(local
-              ? up.length
-                ? (["sep", ...up.slice(0, 5).map((m) => ({ label: `Continue on ${m}`, icon: <ArrowUpFromLine size={13} />, onClick: () => void continueOn(m, root) }))] as const)
-                : []
-              : tab.machine
-                ? (["sep", { label: "Bring to this computer", icon: <ArrowDownToLine size={13} />, onClick: () => void bringHere(tab.machine!, root) }] as const)
-                : []),
-          ]}
-        />
+        <div className="min-w-0">
+          <Menu
+            side="top"
+            align="left"
+            trigger={
+              <button title={`${repo.detached ? "Detached at" : "On"} ${repo.branch} · ${state}`} className={chip}>
+                <GitBranch size={12} className="shrink-0 text-subtle" />
+                <span className="truncate">{repo.branch}</span>
+                {repo.changed > 0 && (
+                  <span className="flex shrink-0 items-center gap-1 text-subtle tabular-nums">
+                    <span className="size-[5px] rounded-full bg-warn" />
+                    {repo.changed}
+                  </span>
+                )}
+                {repo.ahead > 0 && <span className="shrink-0 text-subtle tabular-nums">↑{repo.ahead}</span>}
+                {repo.behind > 0 && <span className="shrink-0 text-subtle tabular-nums">↓{repo.behind}</span>}
+              </button>
+            }
+            items={[
+              { label: "Copy branch name", icon: <Copy size={13} />, onClick: copy(repo.branch) },
+              // The repository goes over as it is: branch, commits, and work not committed yet.
+              ...(local
+                ? up.length
+                  ? (["sep", ...up.slice(0, 5).map((m) => ({ label: `Continue on ${m}`, icon: <ArrowUpFromLine size={13} />, onClick: () => void continueOn(m, root) }))] as const)
+                  : []
+                : tab.machine
+                  ? (["sep", { label: "Bring to this computer", icon: <ArrowDownToLine size={13} />, onClick: () => void bringHere(tab.machine!, root) }] as const)
+                  : []),
+            ]}
+          />
+        </div>
       )}
       {ports.map((p) => (
         <PortChip key={p.port} tab={tab} port={p} />
       ))}
       {!local && machines.find((x) => x.machine.name === tab.machine)?.machine.os === "darwin" && (
-        <button title={`See and use the screen of ${tab.machine} (⇧${mod}S)`} onClick={() => openScreen(tab.machine!)} className={cx(chip, "ml-auto")}>
+        <button title={`See and use the screen of ${tab.machine} (⇧${mod}S)`} onClick={() => openScreen(tab.machine!)} className={cx(chip, "ml-auto shrink-0")}>
           <Monitor size={12} className="shrink-0 text-subtle" />
           <span>Screen</span>
         </button>
       )}
       {(local || tab.machine) && (
-        <button title={`Files on ${local ? "this computer" : tab.machine}: what was made here lately (${mod}O). ${mod}-click a file name in the session to see it.`} onClick={() => openFiles(filesOf(tab))} className={cx(chip, (local || machines.find((x) => x.machine.name === tab.machine)?.machine.os !== "darwin") && "ml-auto")}>
+        <button title={`Files on ${local ? "this computer" : tab.machine}: what was made here lately (${mod}O). ${mod}-click a file name in the session to see it.`} onClick={() => openFiles(filesOf(tab))} className={cx(chip, "shrink-0", (local || machines.find((x) => x.machine.name === tab.machine)?.machine.os !== "darwin") && "ml-auto")}>
           <Files size={12} className="shrink-0 text-subtle" />
           <span>Files</span>
         </button>

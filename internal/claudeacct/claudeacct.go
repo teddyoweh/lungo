@@ -70,13 +70,54 @@ func SetToken(id, token string) error { return secret.Set(secret.ClaudeTokenPref
 
 func statePath() string { return filepath.Join(paths.State(), "claude-accounts.json") }
 
-// Load reads every account's last status.
+// Load reads every account's last status, brought up to now (see Settle).
 func Load() map[string]Status {
 	out := map[string]Status{}
 	if b, err := os.ReadFile(statePath()); err == nil {
 		_ = json.Unmarshal(b, &out)
 	}
+	now := time.Now()
+	for id, st := range out {
+		out[id] = Settle(st, now)
+	}
 	return out
+}
+
+// Settle is what a status says now, without asking: a window whose reset has passed is empty
+// again (and not running: its next one starts when the account is next used), and a limit
+// whose reset has passed is over.
+func Settle(st Status, now time.Time) Status {
+	if len(st.Windows) > 0 {
+		ws := make(map[string]*Window, len(st.Windows))
+		for name, w := range st.Windows {
+			if w != nil && !w.ResetsAt.IsZero() && !w.ResetsAt.After(now) {
+				w = &Window{}
+			}
+			ws[name] = w
+		}
+		st.Windows = ws
+	}
+	if st.State == StateLimited && !st.ResetsAt.IsZero() && !st.ResetsAt.After(now) {
+		st.State, st.LimitType, st.ResetsAt, st.Message = StateOK, "", time.Time{}, ""
+		for name, w := range st.Windows {
+			if w != nil && w.Utilization >= 1 && w.ResetsAt.After(now) { // another window is still used up
+				st.State, st.LimitType, st.ResetsAt = StateLimited, name, w.ResetsAt
+			}
+		}
+	}
+	return st
+}
+
+// Running reports whether one of the account's usage windows has started and not yet reset.
+// Checking an account starts its windows (the check is a small Claude request), so one with
+// none running is left alone until it is used: a check would start its week while it waits.
+func (s Status) Running(now time.Time) bool {
+	for _, w := range s.Windows {
+		if w != nil && w.ResetsAt.After(now) {
+			return true
+		}
+	}
+	return false
 }
 
 // Save records one account's status (under a lock: the desktop app and the background
@@ -257,12 +298,19 @@ func trim(s string) string {
 // SameAccount reports whether two statuses look like the same account: the weekly window
 // resets at the same moment and both windows are used about as much. Reset times are set per
 // account, so this tells accounts apart without the profile access these tokens lack.
+//
+// Resets are rounded to the hour, so accounts started in the same hour share one, and a week
+// at 0% or 100% says nothing about whose it is: only a week partly used, the same to a
+// percent, counts.
 func SameAccount(a, b Status) bool {
 	wa, wb := a.Windows["seven_day"], b.Windows["seven_day"]
 	if wa == nil || wb == nil || wa.ResetsAt.IsZero() || !wa.ResetsAt.Equal(wb.ResetsAt) {
 		return false
 	}
-	if d := wa.Utilization - wb.Utilization; d > 0.02 || d < -0.02 {
+	if wa.Utilization < 0.03 || wa.Utilization > 0.97 {
+		return false
+	}
+	if d := wa.Utilization - wb.Utilization; d > 0.01 || d < -0.01 {
 		return false
 	}
 	fa, fb := a.Windows["five_hour"], b.Windows["five_hour"]
@@ -272,6 +320,25 @@ func SameAccount(a, b Status) bool {
 		}
 	}
 	return true
+}
+
+// DifferentAccount reports whether two statuses taken a moment apart can't be the same
+// account: a window running on both with another reset time, or used clearly more on one.
+// (Two accounts can still look alike; this only rules out.)
+func DifferentAccount(a, b Status) bool {
+	for _, name := range []string{"seven_day", "five_hour"} {
+		wa, wb := a.Windows[name], b.Windows[name]
+		if wa == nil || wb == nil || wa.ResetsAt.IsZero() || wb.ResetsAt.IsZero() {
+			continue
+		}
+		if !wa.ResetsAt.Equal(wb.ResetsAt) {
+			return true
+		}
+		if d := wa.Utilization - wb.Utilization; d > 0.02 || d < -0.02 {
+			return true
+		}
+	}
+	return false
 }
 
 // Plan turns Claude Code's account details into a short plan name ("Max 20x").
@@ -308,6 +375,12 @@ func WindowLabel(name string) string {
 	return strings.ReplaceAll(name, "_", " ")
 }
 
+// OrgBlocked reports whether the token works but the account's organization doesn't let
+// subscriptions use Claude Code. Signing in again doesn't change that; an admin can.
+func OrgBlocked(st Status) bool {
+	return st.State == StateInvalid && strings.Contains(strings.ToLower(st.Message), "organization has disabled")
+}
+
 // Describe is a one-line summary of a status.
 func Describe(st Status) string {
 	switch st.State {
@@ -317,6 +390,9 @@ func Describe(st Status) string {
 		}
 		return "limit reached"
 	case StateInvalid:
+		if OrgBlocked(st) {
+			return "its organization has turned off Claude Code for subscriptions"
+		}
 		return "token rejected"
 	case StateError:
 		return "couldn't check: " + st.Message

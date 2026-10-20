@@ -1791,8 +1791,16 @@ export function wireEvents() {
   });
   on<APIKeyView[]>("keys", (keys) => setState({ keys: keys ?? [] }));
   on<ClaudeAccountView[]>("claude:accounts", (claudeAccounts) => setState({ claudeAccounts: claudeAccounts ?? [] }));
+  // A /login here switched to an account the pool doesn't have: its browser approval opened.
+  on<string>("claude:adding", (email) => {
+    toast("info", `Adding ${email}`, "Approve it in the browser window that opened. Once added, sessions use it, and switching back to it never needs a sign-in again.", {
+      label: "Accounts",
+      run: () => setState({ view: "accounts" }),
+    });
+  });
   on<TickResult>("claude:switched", (r) => {
-    toast("info", `Machines now use ${r.to}`, `${r.from}: ${r.reason}.${r.restarted ? ` Resumed ${r.restarted} session${r.restarted === 1 ? "" : "s"}.` : ""}`, {
+    const why = r.followed ? "Claude Code on this Mac signed in to it with /login." : `${r.from}: ${r.reason}.`;
+    toast("info", `Sessions now use ${r.to}`, `${why}${r.restarted ? ` Resumed ${r.restarted} session${r.restarted === 1 ? "" : "s"}.` : ""}`, {
       label: "Accounts",
       run: () => setState({ view: "accounts" }),
     });

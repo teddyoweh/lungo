@@ -71,3 +71,40 @@ func TestPlan(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+// A status read later says what is true then: past resets empty their windows and end limits.
+func TestSettle(t *testing.T) {
+	now := time.Now()
+	st := Status{State: StateLimited, LimitType: "seven_day", ResetsAt: now.Add(-time.Minute), Windows: map[string]*Window{
+		"seven_day": {Utilization: 1, ResetsAt: now.Add(-time.Minute)},
+		"five_hour": {Utilization: 0.2, ResetsAt: now.Add(time.Hour)},
+	}}
+	got := Settle(st, now)
+	if got.State != StateOK || !got.ResetsAt.IsZero() || got.Windows["seven_day"].Utilization != 0 || !got.Windows["seven_day"].ResetsAt.IsZero() {
+		t.Errorf("after the weekly reset: %+v %+v", got, got.Windows["seven_day"])
+	}
+	if !got.Running(now) || st.Windows["seven_day"].Utilization != 1 {
+		t.Error("the 5-hour window still runs, and the original is untouched")
+	}
+	// The 5-hour limit ended but the week is still used up.
+	st = Status{State: StateLimited, LimitType: "five_hour", ResetsAt: now.Add(-time.Minute), Windows: map[string]*Window{
+		"five_hour": {Utilization: 1, ResetsAt: now.Add(-time.Minute)},
+		"seven_day": {Utilization: 1, ResetsAt: now.Add(48 * time.Hour)},
+	}}
+	if got := Settle(st, now); got.State != StateLimited || got.LimitType != "seven_day" || !got.ResetsAt.Equal(now.Add(48*time.Hour)) {
+		t.Errorf("week still used up: %+v", got)
+	}
+	if (Status{State: StateOK, Windows: map[string]*Window{"seven_day": {}}}).Running(now) {
+		t.Error("a window with no reset isn't running")
+	}
+}
+
+// Accounts started in the same hour, used up or untouched, look alike; they aren't one.
+func TestSameAccountNeedsEvidence(t *testing.T) {
+	at := time.Date(2026, 10, 20, 7, 0, 0, 0, time.UTC)
+	full := Status{Windows: map[string]*Window{"seven_day": {Utilization: 1, ResetsAt: at}}}
+	empty := Status{Windows: map[string]*Window{"seven_day": {Utilization: 0, ResetsAt: at}}}
+	if SameAccount(full, full) || SameAccount(empty, empty) {
+		t.Error("0% or 100% weeks matched")
+	}
+}

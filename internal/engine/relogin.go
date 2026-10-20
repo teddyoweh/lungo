@@ -26,7 +26,8 @@ import (
 //   - stuck on a usage-limit prompt (the old login's limit).
 // One that is working is left until its turn ends; one asking a question is left for you.
 // Only sessions whose conversation ID is known are moved: "the latest conversation in the
-// folder" could be another session's when several share a folder.
+// folder" could be another session's when several share a folder. Sessions on this computer
+// are moved the same way (see claudelocal.go).
 
 // MoveSessionsOff reports whether moving sessions to a new login is turned off.
 func MoveSessionsOff() bool {
@@ -37,7 +38,7 @@ func MoveSessionsOff() bool {
 // ReloginCandidate says whether a session is due to be moved to the machine's new login, and
 // in which way: "idle" (restart when nothing is typed) or "limit" (stuck on a limit prompt).
 func ReloginCandidate(s Session) string {
-	if IsLocal(s.Machine) || !s.Claude || !s.OldLogin || !sessionID.MatchString(s.SID) {
+	if !s.Claude || !s.OldLogin || !sessionID.MatchString(s.SID) {
 		return ""
 	}
 	switch {
@@ -143,6 +144,11 @@ if [ -n "$id" ] && ls "$HOME"/.claude/projects/*/"$id.jsonl" >/dev/null 2>&1; th
 elif [ -n "$rec" ]; then line="claude"` + sshx.Quote(f) + `
 else echo "can't tell which conversation this is"; exit 4; fi
 `
+	if IsLocal(machine) {
+		// The shell may predate the claude wrapper (see claudelocal.go): load it first.
+		pick += `line=` + sshx.Quote(localLoginPrefix()) + `"$line"
+`
+	}
 	shell := `zsh|bash|fish|sh|dash|-zsh|-bash`
 	script := `s=` + sshx.Quote(session) + `; draft=""
 tmux has-session -t "=$s" 2>/dev/null || { echo "no such session"; exit 1; }

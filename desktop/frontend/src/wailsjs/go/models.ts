@@ -542,6 +542,23 @@ export namespace engine {
 		}
 	}
 	
+	export class LocalLogin {
+	    email: string;
+	    accountId?: string;
+	    // Go type: time
+	    changedAt?: any;
+	
+	    static createFrom(source: any = {}) {
+	        return new LocalLogin(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.email = source["email"];
+	        this.accountId = source["accountId"];
+	        this.changedAt = source["changedAt"];
+	    }
+	}
 	export class MovePlan {
 	    from: string;
 	    to: string;

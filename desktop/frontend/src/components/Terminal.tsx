@@ -87,6 +87,26 @@ function gpuGone(key: string) {
   if (i >= 0) gpuRecent.splice(i, 1);
 }
 
+// WebKit kills a window's GPU process when it hangs. Every WebGL context is lost and comes
+// back, but the canvases holding the glyphs all panes share come back empty while xterm still
+// counts those glyphs as drawn: panes go blank but for a few stray letters. So a lost context
+// lets go of every pane's renderer (the glyphs go with the last) and builds them again for
+// the panes on screen. A GPU that keeps failing leaves the window on the plain renderer.
+const gpuAgain = new Map<string, () => void>(); // pane key → build its renderer again if on screen
+let gpuOff = false;
+let gpuResets: number[] = [];
+let gpuResetTimer: number | undefined;
+function gpuLost() {
+  window.clearTimeout(gpuResetTimer);
+  gpuResetTimer = window.setTimeout(() => {
+    const now = Date.now();
+    gpuResets = [...gpuResets.filter((at) => now - at < 60_000), now];
+    gpuOff = gpuResets.length > 3;
+    for (const drop of [...gpuDrop.values()]) drop();
+    if (!gpuOff) for (const again of gpuAgain.values()) again();
+  }, 500);
+}
+
 /** Runs fn when the page has nothing else to do (soon in any case). */
 function whenIdle(fn: () => void) {
   const ric = (window as unknown as { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => number }).requestIdleCallback;
@@ -452,6 +472,9 @@ export const TerminalView = memo(function TerminalView({ tab, active, focused }:
     fit.current = f;
     terminals.set(tab.key, t);
     senders.set(tab.key, typed);
+    gpuAgain.set(tab.key, () => activeRef.current && setGPU(true));
+    // The context-lost event doesn't bubble; it is caught on its way down to the canvas.
+    host.current?.addEventListener("webglcontextlost", gpuLost, true);
     if (import.meta.env.DEV) devTerms()[tab.key] = t; // lets dev checks read what a pane shows
 
     // The mouse in a session pane. tmux asks for every click, so left alone xterm would hand
@@ -565,6 +588,8 @@ export const TerminalView = memo(function TerminalView({ tab, active, focused }:
       ro.disconnect();
       obs.disconnect();
       host.current?.removeEventListener("copy", keepClipboard, true);
+      host.current?.removeEventListener("webglcontextlost", gpuLost, true);
+      gpuAgain.delete(tab.key);
       ws.current?.close();
       if (import.meta.env.DEV) delete devTerms()[tab.key];
       terminals.delete(tab.key);
@@ -622,6 +647,7 @@ export const TerminalView = memo(function TerminalView({ tab, active, focused }:
     if (!t?.element) return;
     if (!on) return releaseGPU();
     if (gl.current) return gpuUsed(tabRef.current.key, releaseGPU);
+    if (gpuOff) return;
     try {
       const a = new WebglAddon();
       a.onContextLoss(() => {

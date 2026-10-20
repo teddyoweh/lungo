@@ -71,15 +71,26 @@ set -g base-index 1
 setw -g pane-base-index 1
 ` + bootstrap.TmuxManaged
 
+// localConfText is localTmuxConf plus where the shells in its panes find the claude wrapper
+// (see claudelocal.go).
+func localConfText() string {
+	text := localTmuxConf
+	if p := localLoginScript(); !strings.ContainsAny(p, "'\n") {
+		text += "set-environment -g SKY_CLAUDE_LOGIN '" + p + "'\n"
+	}
+	return text
+}
+
 func localConf() (string, error) {
 	path := filepath.Join(paths.Root(), "tmux.local.conf")
-	if have, err := os.ReadFile(path); err == nil && string(have) == localTmuxConf {
+	want := localConfText()
+	if have, err := os.ReadFile(path); err == nil && string(have) == want {
 		return path, nil
 	}
 	if err := os.MkdirAll(paths.Root(), 0o700); err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(path, []byte(localTmuxConf), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(want), 0o600); err != nil {
 		return "", err
 	}
 	// New settings reach a server that is already running (it read the file when it started).
@@ -250,6 +261,7 @@ func (e *Engine) LocalSessions(ctx context.Context) ([]Session, error) {
 		return sessions, nil
 	}
 	screens := localScreens(ctx, capture)
+	loginAt := localLoginAt()
 	host, _ := os.Hostname()
 	host, _, _ = strings.Cut(host, ".")
 	for i := range sessions {
@@ -266,6 +278,9 @@ func (e *Engine) LocalSessions(ctx context.Context) ([]Session, error) {
 		}
 		rec := readClaudeRecord(pid)
 		s.SID = rec.SessionID
+		if !loginAt.IsZero() && s.SID != "" { // no record here: a Claude with a config dir of its own
+			s.LoginAt, s.OldLogin = loginAt, onOldLogin(loginAt, procs.Rows[pid].PPID, shells[s.Name])
+		}
 		switch rec.Status {
 		case "busy", "shell":
 			s.State = "working"

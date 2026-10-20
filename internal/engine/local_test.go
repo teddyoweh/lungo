@@ -247,7 +247,6 @@ func TestOldLogin(t *testing.T) {
 		"working":         {Machine: "demo", Claude: true, OldLogin: true, State: "working", SID: a.SID},
 		"asking":          {Machine: "demo", Claude: true, OldLogin: true, State: "waiting", Message: "Claude needs your permission to use Bash", SID: a.SID},
 		"no conversation": {Machine: "demo", Claude: true, OldLogin: true, State: "idle"},
-		"this computer":   {Machine: LocalMachine, Claude: true, OldLogin: true, State: "idle", SID: a.SID},
 		"current login":   {Machine: "demo", Claude: true, State: "idle", SID: a.SID},
 	} {
 		if got := ReloginCandidate(s); got != "" {
